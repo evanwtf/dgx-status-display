@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from dgx_status.sysfs import read_fans, read_hwmon, read_thermal_zones, summarize
+from dgx_status.sysfs import (
+    installed_memory_gib,
+    read_fans,
+    read_hwmon,
+    read_thermal_zones,
+    summarize,
+)
 
 
 def test_thermal_zones(sys_root: Path) -> None:
@@ -103,3 +109,21 @@ def test_unreadable_values_are_skipped(tmp_path: Path) -> None:
     (h / "fan1_label").write_text("fan0\n")
     assert read_thermal_zones(tmp_path) == []
     assert read_fans(read_hwmon(tmp_path)) == {}
+
+
+def test_installed_memory(sys_root: Path) -> None:
+    """1023 online blocks of 0x8000000 bytes (128 MiB): 127.875 GiB."""
+    assert installed_memory_gib(sys_root) == 127.875
+
+
+def test_installed_memory_counts_online_blocks_only(tmp_path: Path) -> None:
+    mem = tmp_path / "devices" / "system" / "memory"
+    mem.mkdir(parents=True)
+    (mem / "block_size_bytes").write_text("40000000\n")  # 1 GiB, in hex
+    for i, state in enumerate(["1", "1", "0", "1"]):
+        (mem / f"memory{i}").mkdir()
+        (mem / f"memory{i}" / "online").write_text(state + "\n")
+    assert installed_memory_gib(tmp_path) == 3.0
+    (mem / "block_size_bytes").write_text("zz\n")
+    assert installed_memory_gib(tmp_path) is None
+    assert installed_memory_gib(tmp_path / "none") is None

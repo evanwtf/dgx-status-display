@@ -12,11 +12,11 @@ import logging
 import os
 import socket
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from dgx_status import __version__, logging_setup
-from dgx_status.collector import Collector
+from dgx_status.collector import Collector, Sources
 from dgx_status.daemon import LogSink, Sink, run
 from dgx_status.gpu import NvmlGpu
 from dgx_status.serial_link import DEFAULT_DEVICE_GLOB, SerialLink, open_port
@@ -25,6 +25,34 @@ logger = logging.getLogger(__name__)
 
 ENV_DEVICE = "DGX_STATUS_DEVICE"
 ENV_LOG_LEVEL = "DGX_STATUS_LOG_LEVEL"
+ENV_LAN = "DGX_STATUS_LAN_IFACE"
+ENV_ROCE = "DGX_STATUS_ROCE_PORTS"
+ENV_CLUSTER = "DGX_STATUS_CLUSTER_IFACES"
+ENV_SSD = "DGX_STATUS_SSD_DISK"
+ENV_DISK_PATH = "DGX_STATUS_DISK_PATH"
+
+
+def _names(value: str | None) -> tuple[str, ...] | None:
+    """A comma list; None (detect) when unset or empty."""
+    if not value:
+        return None
+    names = tuple(n.strip() for n in value.split(",") if n.strip())
+    return names or None
+
+
+def sources_from_env(env: Mapping[str, str]) -> Sources:
+    """The overrides for the automatic choices (README, .env.example)."""
+    roce = _names(env.get(ENV_ROCE))
+    if roce is not None:
+        # A bare device name means its port 1.
+        roce = tuple(p if "/" in p else f"{p}/1" for p in roce)
+    return Sources(
+        lan_iface=env.get(ENV_LAN) or None,
+        roce_ports=roce,
+        cluster_ifaces=_names(env.get(ENV_CLUSTER)),
+        ssd_disk=env.get(ENV_SSD) or None,
+        disk_path=env.get(ENV_DISK_PATH) or "/",
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -73,6 +101,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         gpu=NvmlGpu(),
         host=short_hostname(),
         clock=time.time,
+        sources=sources_from_env(os.environ),
     )
     logger.info(
         "dgx-status %s: %s every %.1f s",

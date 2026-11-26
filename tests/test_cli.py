@@ -94,3 +94,30 @@ class _NoGpu:
         from dgx_status.gpu import GpuReading
 
         return GpuReading()
+
+
+def test_sources_default_to_detection() -> None:
+    from dgx_status.cli import sources_from_env
+    from dgx_status.collector import Sources
+
+    assert sources_from_env({}) == Sources()
+    assert sources_from_env({"DGX_STATUS_ROCE_PORTS": " , "}) == Sources()
+
+
+def test_sources_from_env() -> None:
+    from dgx_status.cli import sources_from_env
+
+    s = sources_from_env(
+        {
+            "DGX_STATUS_LAN_IFACE": "eth0",
+            "DGX_STATUS_ROCE_PORTS": "mlx5_0, mlx5_1/2",
+            "DGX_STATUS_CLUSTER_IFACES": "ib0,ib1",
+            "DGX_STATUS_SSD_DISK": "sda",
+            "DGX_STATUS_DISK_PATH": "/data",
+        }
+    )
+    assert s.lan_iface == "eth0"
+    assert s.roce_ports == ("mlx5_0/1", "mlx5_1/2")
+    assert s.cluster_ifaces == ("ib0", "ib1")
+    assert s.ssd_disk == "sda"
+    assert s.disk_path == "/data"

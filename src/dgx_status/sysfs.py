@@ -161,3 +161,32 @@ def summarize(zones: list[Zone], devices: list[HwmonDevice]) -> ThermalSummary:
         nic_c=max(nics) if nics else None,
         detail=detail,
     )
+
+
+_MEMBLOCK_RE = re.compile(r"^memory(\d+)$")
+BYTES_PER_GIB = 1024**3
+
+
+def installed_memory_gib(sys_root: Path) -> float | None:
+    """Online memory blocks x block size, in GiB: the memory installed.
+
+    MemTotal is lower: firmware and the kernel keep about 6 GiB before it.
+    block_size_bytes is hex without a prefix (8000000 = 128 MiB). None when
+    the kernel has no memory hotplug view.
+    """
+    memory = sys_root / "devices" / "system" / "memory"
+    text = _read(memory / "block_size_bytes")
+    if not text:
+        return None
+    try:
+        block = int(text, 16)
+    except ValueError:
+        return None
+    online = sum(
+        1
+        for _, path in _numbered(memory, _MEMBLOCK_RE)
+        if _read(path / "online") == "1"
+    )
+    if block <= 0 or online == 0:
+        return None
+    return online * block / BYTES_PER_GIB

@@ -62,3 +62,46 @@ def test_capture_keep_args(tmp_path: Path) -> None:
     capture(proc, tmp_path / "none", tmp_path / "out", [9], delay=0, keep_args=True)
     got = (tmp_path / "out/proc/9/cmdline").read_bytes()
     assert got == b"vllm\0serve\0/srv/model\0"
+
+
+def test_route_keeps_defaults_with_no_gateway() -> None:
+    from capture_fixtures import sanitize_route
+
+    text = (
+        "Iface\tDestination\tGateway \tFlags\n"
+        "eth0\t00000000\t0101A8C0\t0003\n"
+        "eth0\t0001A8C0\t00000000\t0001\n"
+    )
+    assert sanitize_route(text) == (
+        "Iface\tDestination\tGateway \tFlags\neth0\t00000000\t00000000\t0003\n"
+    )
+
+
+def test_mounts_keep_root_only() -> None:
+    from capture_fixtures import sanitize_mounts
+
+    text = "/dev/sda2 / ext4 rw 0 0\n/dev/sda3 /srv/private ext4 rw 0 0\n"
+    assert sanitize_mounts(text) == "/dev/sda2 / ext4 rw 0 0\n"
+
+
+def test_uevent_keeps_driver_only() -> None:
+    from capture_fixtures import driver_only
+
+    text = "DRIVER=mlx5_core\nPCI_SLOT_NAME=0000:01:00.0\nMODALIAS=pci:v1\n"
+    assert driver_only(text) == "DRIVER=mlx5_core\n"
+
+
+def test_capture_takes_counters_twice_and_no_identifiers(
+    dgx_root: Path, tmp_path: Path
+) -> None:
+    out = tmp_path / "out"
+    capture(dgx_root / "proc", dgx_root / "sys", out, pids=[], delay=0)
+    rx = "class/net/enP7s7/statistics/rx_bytes"
+    assert (out / "sys" / rx).read_text().strip() == "1445319700486"
+    assert (out / "sys_t1" / rx).exists()
+    assert (out / "sys/devices/system/memory/block_size_bytes").exists()
+    assert (out / "sys/class/net/enp1s0f0np0/device/uevent").read_text() == (
+        "DRIVER=mlx5_core\n"
+    )
+    names = {p.name for p in out.rglob("*")}
+    assert not names & {"address", "node_guid", "sys_image_guid", "serial"}

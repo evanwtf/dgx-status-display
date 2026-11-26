@@ -104,8 +104,10 @@ overview fields always fit: every one at its longest takes 639 bytes.
 
 ### Example
 
+A frame from `dgx-status --dry-run` on a DGX Spark (the host name replaced):
+
 ```json
-{"v":1,"t":1795664697,"tz_s":-18000,"host":"test-host","up_s":1214815,"load1":0.35,"load5":0.48,"load15":0.36,"cpu_pct":0.3,"mem_used_gib":7.2,"mem_total_gib":127.9,"gpu_pct":0,"gpu_w":4,"gpu_c":44,"occ":"idle","fan0_rpm":2790,"fan1_rpm":4185,"board_c":45.8,"nvme_c":44.9,"nic_c":47.0,"th":[["tz0",45.8],["tz1",43.9],["nvme",44.9],["nic0",47.0],["wifi",42.0]],"lan_rx_bps":32640,"lan_tx_bps":67401,"lan_mbps":2500,"roce_rx_bps":0,"roce_tx_bps":0,"cip_bps":3680,"ssd_rd_Bps":115194000,"ssd_wr_Bps":767000,"disk_used_gb":3340,"disk_size_gb":4032}
+{"v":1,"t":1795717129,"host":"test-host","tz_s":-18000,"up_s":1267247,"load1":0.63,"load5":0.91,"load15":0.93,"cpu_pct":4.6,"mem_used_gib":7.9,"mem_total_gib":127.9,"gpu_pct":0,"gpu_w":4,"gpu_c":46,"occ":"idle","fan0_rpm":2790,"fan1_rpm":4185,"board_c":47.8,"nvme_c":46.9,"nic_c":50.0,"lan_rx_bps":127199,"lan_tx_bps":471094,"lan_mbps":2500,"roce_rx_bps":0,"roce_tx_bps":0,"cip_bps":0,"ssd_rd_Bps":74401,"ssd_wr_Bps":264537,"disk_used_gb":3339,"disk_size_gb":4032,"th":[["tz0",47.8],["tz1",46.8],["tz2",46.9],["tz3",46.8],["tz4",46.8],["tz5",47.8],["tz6",47.7],["nvme",46.9],["nvme s1",47.9],["nvme s2",46.9],["nic0",50.0],["nic1",50.0],["nic2",50.0],["nic3",50.0],["wifi",43.0]]}
 ```
 
 ## Display to host: hello and log lines

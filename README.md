@@ -120,6 +120,18 @@ adds `dialout` for this service only. The daemon finds the board's port
 itself; to pin one port, put `DGX_STATUS_DEVICE=...` in
 `/etc/default/dgx-status`.
 
+The network and storage tiles find their sources each second. Set one of
+these in the same file only when the automatic choice is wrong
+(`.env.example` lists them all):
+
+| Variable | Default |
+| --- | --- |
+| `DGX_STATUS_LAN_IFACE` | the interface with the default route |
+| `DGX_STATUS_ROCE_PORTS` | every RDMA port on an Ethernet link layer, as `device/port` |
+| `DGX_STATUS_CLUSTER_IFACES` | every `mlx5_core` interface |
+| `DGX_STATUS_SSD_DISK` | the disk that holds `DGX_STATUS_DISK_PATH` (`nvme0n1`) |
+| `DGX_STATUS_DISK_PATH` | `/` |
+
 ```bash
 sed -e "s|@USER@|$USER|g" -e "s|@REPO@|$REPO|g" "$REPO/deploy/dgx-status.service" \
   | sudo tee /etc/systemd/system/dgx-status.service >/dev/null
@@ -261,7 +273,7 @@ unit.
 | --- | --- |
 | GPU | Usage %, Power W, Temp °C, Running (`idle` or the backend) |
 | Cooling | Fan 1 and Fan 2 in kRPM (2700 RPM shows as `2.7`), Board °C, SSD °C |
-| Host | CPU %, Memory used (`/ total GiB` as the unit), Load avg, Up |
+| Host | CPU %, Memory used (`/ 128 GiB`, the memory installed, as the unit), Load avg, Up |
 
 ![The three pages and the NO DATA screen](docs/img/pages.png)
 
