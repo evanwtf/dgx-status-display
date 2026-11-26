@@ -24,6 +24,11 @@
 static uint16_t s_fb[W * W];
 static uint8_t s_rgb[W * W * 3];
 static int s_failed;
+/* The README image: four screens at half size, 2 x 2. */
+#define HALF (W / 2)
+#define SEP 8
+#define CW (2 * HALF + SEP)
+static uint8_t s_sheet[CW * CW * 3];
 
 /* The same real frame as firmware/test/test_logic.c: `dgx-status --dry-run
  * --once` on a DGX Spark, with the host name replaced. */
@@ -73,6 +78,23 @@ static void save(const char *dir, const char *name)
         return;
     }
     printf("wrote %s\n", path);
+}
+
+/* Downscale the current frame 2:1 (box filter) into sheet cell `cell`. */
+static void add_to_sheet(int cell)
+{
+    int ox = (cell % 2) * (HALF + SEP), oy = (cell / 2) * (HALF + SEP);
+    for (int y = 0; y < HALF; y++) {
+        for (int x = 0; x < HALF; x++) {
+            for (int ch = 0; ch < 3; ch++) {
+                int sum = 0;
+                for (int k = 0; k < 4; k++) {
+                    sum += s_rgb[((2 * y + k / 2) * W + 2 * x + k % 2) * 3 + ch];
+                }
+                s_sheet[((oy + y) * CW + ox + x) * 3 + ch] = (uint8_t)(sum / 4);
+            }
+        }
+    }
 }
 
 static void show(const char *dir, const char *name, const status_frame_t *f, link_state_t st,
@@ -168,9 +190,13 @@ int main(int argc, char **argv)
     busy.cpu_pct = 63;
     busy.mem_used_gib = 101.4f;
     busy.load1 = 12.48f;
+    memset(s_sheet, 0x30, sizeof(s_sheet)); /* gray gutters between cells */
     show(dir, "4-busy-gpu", &busy, LINK_LIVE, 0, on_page(PAGE_GPU));
+    add_to_sheet(0);
     show(dir, "5-busy-cooling", &busy, LINK_LIVE, 0, on_page(PAGE_COOLING));
+    add_to_sheet(1);
     show(dir, "6-busy-host", &busy, LINK_LIVE, 0, on_page(PAGE_HOST));
+    add_to_sheet(2);
     show(dir, "7-stale", &busy, LINK_STALE, 6, on_page(PAGE_GPU));
 
     status_frame_t missing;
@@ -182,6 +208,14 @@ int main(int argc, char **argv)
 
     carousel_t nodata = {.page = PAGE_GPU, .no_data = true};
     show(dir, "9-no-data", &real, LINK_NO_DATA, 133, nodata);
+    add_to_sheet(3);
+    char path[512];
+    snprintf(path, sizeof(path), "%s/pages.png", dir);
+    if (png_write_rgb(path, s_sheet, CW, CW) != 0) {
+        s_failed++;
+    } else {
+        printf("wrote %s\n", path);
+    }
     show(dir, "10-no-data-boot", &missing, LINK_NO_DATA, -1, nodata);
     carousel_t detail = {.page = PAGE_GPU, .detail = true};
     show(dir, "11-detail", &real, LINK_LIVE, 0, detail);

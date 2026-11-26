@@ -167,18 +167,31 @@ sudo systemctl disable --now dgx-status   # the factory app does not read frames
 
 ## What the screen shows
 
-- **Overview:** host name and host clock; link state; GPU util %, power (W)
-  and temperature; `On GPU: <backend>` or `On GPU: idle`; memory used/total
-  GiB; CPU %; load average; fan RPM; board, NVMe and NIC temperatures;
-  uptime.
-- **Detail** (tap to switch): every temperature sensor, the frame and reject
-  counts, and the firmware version.
-- **Link state:** LIVE (a frame in the last 3 s), STALE (3–10 s, with the
-  age), NO DATA (over 10 s or never: the screen dims and says "DGX not
-  sending").
-- **Burn-in care:** black background, gray text, the layout moves a few
-  pixels every 3 minutes along a 10-pixel orbit, moderate brightness, a gentle dim after 10 minutes with no change
-  (no tap, no link change, no new GPU occupant), dimmest in NO DATA.
+The panel is about 40 mm across, so every value is big. Three pages of four
+tiles cycle every 10 seconds. Each tile has a label, one value and a unit.
+
+| Page | Tiles |
+| --- | --- |
+| GPU | util %, power W, GPU °C, what is on the GPU (`idle` or the backend) |
+| Cooling | fan 0 and fan 1 in kRPM (2700 RPM shows as `2.7`), board °C, NVMe °C |
+| Host | CPU %, memory used (with `/ total GiB` as the unit), load 1m, uptime |
+
+![The three pages and the NO DATA screen](docs/img/pages.png)
+
+- **Top strip:** a green LIVE dot (amber, with the age, when STALE), the host
+  clock, and one dot per page.
+- **Touch:** a tap moves to the next page and restarts the 10-second timer.
+  A long press opens every temperature sensor; a tap or 20 seconds goes back.
+- **NO DATA** (no frame for over 10 s): the carousel stops; the dimmed screen
+  says "DGX not sending" and how long ago the last frame came.
+- **Colors:** GPU °C turns amber at 80 and red at 90; board and NVMe °C at
+  70 and 80. Everything else stays gray.
+- **Numbers hold still:** values use JetBrains Mono, right-aligned against a
+  fixed edge, with fixed decimal places, so the last digit keeps its column.
+- **Burn-in care:** black background, outlined tiles with no fills, the
+  layout moves along a 10-pixel orbit every 3 minutes, a gentle dim after
+  10 minutes with no change (no tap, no link change, no new GPU occupant),
+  dimmest in NO DATA. The page changes help too.
 
 Each value is one instantaneous reading. An unknown value shows `—`.
 
@@ -192,7 +205,14 @@ uv run mypy
 uv run pytest -q -rs
 uv run python scripts/firmware.py test
 uv run python scripts/firmware.py build
+uv run python scripts/firmware.py preview   # render the UI to firmware/preview/*.png
+uv run python scripts/gen_fonts.py --check  # the fonts regenerate byte for byte
+uv run python scripts/readme_image.py       # refresh docs/img/pages.png from the preview
 ```
+
+The preview compiles the real `view.c` with the same LVGL version and
+settings as the firmware, on the host, and renders each page to a PNG. It
+fails if a value's last digit changes column between two values.
 
 `tests/fixtures/spark/` holds /proc and /sys files copied from a DGX Spark.
 `scripts/capture_fixtures.py` copies a fresh set, read-only.
