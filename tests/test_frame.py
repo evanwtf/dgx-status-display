@@ -14,6 +14,7 @@ def _full() -> Snapshot:
     return Snapshot(
         t=1_795_000_000,
         host="test-host",
+        tz_s=-18000,
         up_s=1214489,
         load=(0.95, 0.54, 0.32),
         cpu_pct=5.17,
@@ -45,6 +46,7 @@ def test_full_frame_values() -> None:
         "v": 1,
         "t": 1_795_000_000,
         "host": "test-host",
+        "tz_s": -18000,
         "up_s": 1214489,
         "load1": 0.95,
         "load5": 0.54,
@@ -137,3 +139,8 @@ def test_non_ascii_host_is_escaped() -> None:
 def test_control_and_quote_characters_stay_inside_json(bad: str) -> None:
     f = _decode(encode_frame(Snapshot(t=1, host=bad)))
     assert f["host"] == bad
+
+
+def test_absurd_tz_offset_is_omitted() -> None:
+    f = _decode(encode_frame(Snapshot(t=1, host="test-host", tz_s=20 * 3600)))
+    assert "tz_s" not in f

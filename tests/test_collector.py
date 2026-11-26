@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -89,3 +90,16 @@ def test_empty_roots_give_a_minimal_snapshot(tmp_path: Path) -> None:
     assert s.mem_used_gib is None
     assert s.fans == {}
     assert s.temps == []
+
+
+def test_tz_offset_is_the_host_offset(
+    live_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2026-11-18 in New York is EST, UTC-5: -18000 s."""
+    monkeypatch.setenv("TZ", "America/New_York")
+    time.tzset()
+    try:
+        assert _collector(live_root, GpuReading()).snapshot().tz_s == -18000
+    finally:
+        monkeypatch.undo()
+        time.tzset()

@@ -34,6 +34,7 @@ cannot read it. It never sends `null`, `NaN` or a placeholder number.
 
 | Key | Type | Unit | Source |
 | --- | --- | --- | --- |
+| `tz_s` | int | s | Host UTC offset, from −50400 to 50400. The display adds it to `t` to show local time. |
 | `up_s` | int | s | `/proc/uptime`, first field |
 | `load1`, `load5`, `load15` | number | — | `/proc/loadavg` |
 | `cpu_pct` | number | % | `/proc/stat` `cpu` line, delta between this frame and the last |
@@ -66,19 +67,20 @@ overview fields always fit.
 ### Example
 
 ```json
-{"v":1,"t":1795664697,"host":"test-host","up_s":1214815,"load1":0.35,"load5":0.48,"load15":0.36,"cpu_pct":0.3,"mem_used_gib":7.2,"mem_total_gib":121.7,"gpu_pct":0,"gpu_w":4,"gpu_c":44,"occ":"idle","fan0_rpm":2790,"fan1_rpm":4185,"board_c":45.8,"nvme_c":44.9,"nic_c":47.0,"th":[["tz0",45.8],["tz1",43.9],["nvme",44.9],["nic0",47.0],["wifi",42.0]]}
+{"v":1,"t":1795664697,"tz_s":-18000,"host":"test-host","up_s":1214815,"load1":0.35,"load5":0.48,"load15":0.36,"cpu_pct":0.3,"mem_used_gib":7.2,"mem_total_gib":121.7,"gpu_pct":0,"gpu_w":4,"gpu_c":44,"occ":"idle","fan0_rpm":2790,"fan1_rpm":4185,"board_c":45.8,"nvme_c":44.9,"nic_c":47.0,"th":[["tz0",45.8],["tz1",43.9],["nvme",44.9],["nic0",47.0],["wifi",42.0]]}
 ```
 
 ## Display to host: hello
 
-The firmware sends one line when it boots:
+The firmware sends one line when it boots, and again when frames start
+after a NO DATA period (for example, after the daemon restarts):
 
 ```json
 {"hello":"dgx-status-display","fw":"0.1.0"}
 ```
 
-The daemon logs it at INFO. A hello after the first one means the board
-rebooted.
+The daemon logs it at INFO. The hello can be lost: the board sends it
+whether or not the host has the port open.
 
 ## Validation on the display
 

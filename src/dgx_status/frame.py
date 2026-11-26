@@ -17,6 +17,7 @@ MAX_LINE_BYTES = 1024
 MAX_HOST_CHARS = 32
 MAX_OCC_CHARS = 48
 MAX_LABEL_CHARS = 15
+MAX_TZ_S = 14 * 3600
 
 
 @dataclass
@@ -25,6 +26,7 @@ class Snapshot:
 
     t: int
     host: str
+    tz_s: int | None = None
     up_s: int | None = None
     load: tuple[float, float, float] | None = None
     cpu_pct: float | None = None
@@ -59,6 +61,8 @@ def _fields(s: Snapshot) -> dict[str, Any]:
         "t": int(s.t),
         "host": s.host[:MAX_HOST_CHARS],
     }
+    if s.tz_s is not None and abs(s.tz_s) <= MAX_TZ_S:
+        f["tz_s"] = int(s.tz_s)
     f["up_s"] = s.up_s
     if s.load is not None:
         f["load1"], f["load5"], f["load15"] = (_num(x, 2) for x in s.load)

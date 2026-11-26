@@ -7,6 +7,7 @@ is the delta between this frame and the last one.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -43,6 +44,8 @@ class Collector:
 
     def snapshot(self) -> Snapshot:
         s = Snapshot(t=int(self._clock()), host=self._host)
+        # The board has no time zone data. Send the host's own UTC offset.
+        s.tz_s = time.localtime(s.t).tm_gmtoff
         s.up_s = procfs.parse_uptime(_read(self._proc / "uptime"))
         s.load = procfs.parse_loadavg(_read(self._proc / "loadavg"))
 
