@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import select
+import struct
+import termios
 import time
 from pathlib import Path
 
 import pytest
+import serial
 
+from dgx_status import serial_link
 from dgx_status.serial_link import SerialLink, open_port, resolve_device
 
 
@@ -33,9 +38,6 @@ class FakePort:
     def read(self, size: int = 1) -> bytes:
         out, self.incoming = self.incoming[:size], self.incoming[size:]
         return out
-
-    def flush(self) -> None:
-        pass
 
     def close(self) -> None:
         self.closed = True
@@ -231,3 +233,87 @@ def test_link_resolves_the_glob_on_each_open(tmp_path: Path) -> None:
     clock.now += 2
     assert link.send(b"x\n")
     assert opened == [str(tmp_path / "dev-1")]
+
+
+def test_open_port_keeps_pyserial_default_modem_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DTR and RTS stay set: clearing DTR first would reset the C6 (RTS=1, DTR=0)."""
+    seen: dict[str, object] = {}
+
+    class Spy:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            seen.update(kwargs)
+
+    monkeypatch.setattr(serial, "Serial", Spy)
+    open_port("/dev/fake")
+    for key in ("dtr", "rts", "dsrdtr", "rtscts"):
+        assert key not in seen
+    assert seen["write_timeout"] == serial_link.WRITE_TIMEOUT_S
+
+
+def test_pty_modem_lines_after_open() -> None:
+    """After a real open, pyserial holds DTR and RTS set."""
+    master, slave = os.openpty()
+    try:
+        port = open_port(os.ttyname(slave))
+        assert isinstance(port, serial.Serial)
+        assert port.dtr is True
+        assert port.rts is True
+        try:
+            bits = struct.unpack("I", fcntl.ioctl(slave, termios.TIOCMGET, b"\0" * 4))[
+                0
+            ]
+        except OSError:
+            bits = None  # a pty has no modem lines on this kernel; state above holds
+        if bits is not None:
+            assert bits & termios.TIOCM_DTR
+            assert bits & termios.TIOCM_RTS
+        port.close()
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def _read_line(fd: int) -> bytes:
+    got = b""
+    deadline = time.monotonic() + 2
+    while not got.endswith(b"\n") and time.monotonic() < deadline:
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if r:
+            got += os.read(fd, 4096)
+    return got
+
+
+def test_pty_hangup_between_frames_then_replug(tmp_path: Path) -> None:
+    """The far end hangs up. The link drops the port, does not raise or
+    block, and reconnects when a new device appears at the same path."""
+    link_path = tmp_path / "usb-Espressif_board-if00"
+    m1, s1 = os.openpty()
+    link_path.symlink_to(os.ttyname(s1))
+    clock = Clock()
+    link = SerialLink(str(link_path), opener=open_port, clock=clock)
+    try:
+        assert link.send(b"one\n")
+        assert _read_line(m1) == b"one\n"
+        os.close(s1)
+        os.close(m1)  # hang-up
+
+        start = time.monotonic()
+        delivered = [link.send(b"two\n") for _ in range(3)]
+        link.poll()
+        assert time.monotonic() - start < 2  # never blocks
+        assert not any(delivered[1:])
+        assert not link.connected
+
+        m2, s2 = os.openpty()
+        link_path.unlink()
+        link_path.symlink_to(os.ttyname(s2))
+        clock.now += 31
+        assert link.send(b"three\n")
+        assert link.connected
+        assert _read_line(m2) == b"three\n"
+    finally:
+        link.close()
+    os.close(m2)
+    os.close(s2)

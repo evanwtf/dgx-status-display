@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 MIN_BACKOFF_S = 1.0
 MAX_BACKOFF_S = 30.0
 MAX_INCOMING_LINE = 1024
+WRITE_TIMEOUT_S = 1.0
 # The board's USB-Serial-JTAG port, matched by vendor name. The serial number
 # in the real path is the chip's MAC; it is found at run time, never written.
 DEFAULT_DEVICE_GLOB = (
@@ -50,7 +51,6 @@ class Port(Protocol):
     @property
     def in_waiting(self) -> int: ...
     def read(self, size: int = 1, /) -> bytes: ...
-    def flush(self) -> None: ...
     def close(self) -> None: ...
 
 
@@ -64,7 +64,7 @@ def open_port(path: str) -> Port:
     first, which gives RTS=1 DTR=0 for a moment, and that resets the board.
     """
     return serial.Serial(
-        path, baudrate=115200, timeout=0, write_timeout=1.0, exclusive=True
+        path, baudrate=115200, timeout=0, write_timeout=WRITE_TIMEOUT_S, exclusive=True
     )
 
 
@@ -133,8 +133,10 @@ class SerialLink:
             return False
         assert self._port is not None
         try:
+            # No flush(): it calls tcdrain(), which can block forever on a
+            # board that stops reading and raises termios.error on hang-up.
+            # write_timeout already bounds the write.
             self._port.write(line)
-            self._port.flush()
         except (OSError, serial.SerialException) as exc:
             self._drop(exc)
             return False
