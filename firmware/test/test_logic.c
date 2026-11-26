@@ -12,6 +12,7 @@
 #include "burnin.h"
 #include "button.h"
 #include "carousel.h"
+#include "co5300.h"
 #include "fmt.h"
 #include "history.h"
 #include "line_reader.h"
@@ -645,7 +646,7 @@ static void test_tile_colors_and_levels(void)
     CHECK(t[1].hue == HUE_INDIGO);
     CHECK_NEAR(t[1].fill, 4.0f / POWER_FULL_SCALE_W);
     CHECK(t[2].hue == HUE_COOL && t[2].fill < 0); /* temps: hue, no fill */
-    CHECK(t[3].hue == HUE_BRONZE && t[3].fill < 0);
+    CHECK(t[3].hue == HUE_MOSS && t[3].fill < 0);
     CHECK(t[0].hist == HIST_GPU_PCT && t[1].hist == HIST_GPU_W && t[2].hist == HIST_GPU_C);
     CHECK(t[3].hist == HIST_NONE); /* text tiles have no chart */
 
@@ -658,8 +659,8 @@ static void test_tile_colors_and_levels(void)
     page_tiles(PAGE_HOST, &f, t);
     CHECK(t[0].hue == HUE_TEAL);
     CHECK_NEAR(t[1].fill, 7.2f / 121.7f);
-    CHECK(t[2].hue == HUE_BRONZE && t[2].fill < 0); /* load: no CPU count */
-    CHECK(t[3].hue == HUE_BRONZE && t[3].fill < 0);
+    CHECK(t[2].hue == HUE_MOSS && t[2].fill < 0); /* load: no CPU count */
+    CHECK(t[3].hue == HUE_MOSS && t[3].fill < 0);
     CHECK(t[0].hist == HIST_CPU_PCT && t[1].hist == HIST_MEM_GIB);
     CHECK(t[2].hist == HIST_NONE && t[3].hist == HIST_NONE); /* load: no scale */
 
@@ -727,7 +728,7 @@ static void check_pair(const char *what, uint32_t fg, uint32_t bg, double min, b
 
 static void test_contrast(void)
 {
-    static const char *const names[HUE_COUNT] = {"teal",   "indigo", "violet", "bronze",
+    static const char *const names[HUE_COUNT] = {"teal",   "indigo", "violet", "moss",
                                                  "cool",   "warm",   "hot"};
     for (int h = 0; h < HUE_COUNT; h++) {
         const hue_colors_t *c = hue_colors((hue_t)h);
@@ -754,6 +755,53 @@ static void test_contrast(void)
     check_pair("no data age", COLOR_VALUE, COLOR_GROUND, 7.0, true);
     printf("contrast: worst value %.2f:1 (%s); worst label %.2f:1 (%s)\n", g_worst_value,
            g_worst_value_pair, g_worst_label, g_worst_label_pair);
+}
+
+/* HSL hue of a color in degrees, 0..360. */
+static double hue_deg(uint32_t rgb)
+{
+    const double r = ((rgb >> 16) & 0xFF) / 255.0, g = ((rgb >> 8) & 0xFF) / 255.0,
+                 b = (rgb & 0xFF) / 255.0;
+    const double mx = fmax(r, fmax(g, b)), mn = fmin(r, fmin(g, b)), d = mx - mn;
+    if (d <= 0) {
+        return 0;
+    }
+    double h;
+    if (mx == r) {
+        h = fmod((g - b) / d, 6.0);
+    } else if (mx == g) {
+        h = (b - r) / d + 2.0;
+    } else {
+        h = (r - g) / d + 4.0;
+    }
+    h *= 60.0;
+    return h < 0 ? h + 360.0 : h;
+}
+
+static double hue_gap(uint32_t a, uint32_t b)
+{
+    double d = fabs(hue_deg(a) - hue_deg(b));
+    return d > 180.0 ? 360.0 - d : d;
+}
+
+/* Running and Up sat beside a warm temperature tile and read as the same
+ * color. Moss must stay 40 deg or more from every other hue. */
+static void test_moss_stands_apart(void)
+{
+    CHECK(fabs(hue_deg(0xFF0000) - 0) < 1e-9);
+    CHECK(fabs(hue_deg(0x00FF00) - 120) < 1e-9);
+    CHECK(fabs(hue_deg(0x0000FF) - 240) < 1e-9);
+    CHECK(hue_gap(0xFF0000, 0xFF00FF) > 59.9 && hue_gap(0xFF0000, 0xFF00FF) < 60.1);
+    const hue_colors_t *m = hue_colors(HUE_MOSS);
+    for (int h = 0; h < HUE_COUNT; h++) {
+        if (h == HUE_MOSS) {
+            continue;
+        }
+        const hue_colors_t *o = hue_colors((hue_t)h);
+        CHECK(hue_gap(m->base, o->base) >= 40.0);
+        CHECK(hue_gap(m->fill, o->fill) >= 40.0);
+        CHECK(hue_gap(m->line, o->line) >= 40.0);
+    }
 }
 
 static void test_history_ring(void)
@@ -1002,6 +1050,123 @@ static void test_pmu_key(void)
     CHECK(pmu_key_irq_enable_value(0xF0) == 0xFF);
 }
 
+static void test_turn_setting(void)
+{
+    fake_store_t fs = {0};
+    settings_store_t st = {fake_load, fake_save, &fs};
+    CHECK(settings_turn(NULL) == TURN_0);
+    fs.value = 0;
+    CHECK(settings_turn(&st) == TURN_0);
+    /* Four presses go all the way round, each one stored. */
+    turn_t t = TURN_0;
+    const turn_t want[4] = {TURN_90, TURN_180, TURN_270, TURN_0};
+    for (int i = 0; i < 4; i++) {
+        t = settings_turn_cw(&st, t);
+        CHECK(t == want[i]);
+        CHECK(fs.saves == i + 1 && fs.value == (uint8_t)want[i]);
+        CHECK(settings_turn(&st) == want[i]); /* survives a "reboot" */
+    }
+    CHECK(turn_degrees(TURN_0) == 0 && turn_degrees(TURN_90) == 90);
+    CHECK(turn_degrees(TURN_180) == 180 && turn_degrees(TURN_270) == 270);
+    fs.value = 4; /* garbage in flash */
+    CHECK(settings_turn(&st) == TURN_0);
+    fs.value = 255;
+    CHECK(settings_turn(&st) == TURN_0);
+    fs.fail_save = true;
+    CHECK(settings_turn_cw(&st, TURN_270) == TURN_0);
+    CHECK(settings_turn_cw(NULL, TURN_90) == TURN_180);
+}
+
+static void test_button_short(void)
+{
+    CHECK(button_is_short(0));
+    CHECK(button_is_short(209));
+    CHECK(button_is_short(BUTTON_SHORT_MS - 1));
+    CHECK(!button_is_short(BUTTON_SHORT_MS));
+    CHECK(!button_is_short(1890));
+}
+
+/* LVGL 9.6 lv_display_rotate_point(), the non-ccw path that lv_indev.c
+ * uses for touch: a panel point to a logical point. Copied here to show
+ * that touch lands where the port drew. */
+static void lvgl_touch_to_logical(lrot_t r, int32_t n, int32_t *x, int32_t *y)
+{
+    const int32_t px = *x, py = *y;
+    switch (r) {
+    case LROT_0: break;
+    case LROT_90: *x = n - py - 1; *y = px; break;
+    case LROT_180: *x = n - px - 1; *y = n - py - 1; break;
+    case LROT_270: *x = py; *y = n - px - 1; break;
+    }
+}
+
+static void test_co5300_rotation(void)
+{
+    const int32_t n = 480;
+    /* The rounder. */
+    px_area_t a = {3, 5, 6, 8};
+    co5300_round(&a);
+    CHECK(a.x1 == 2 && a.y1 == 4 && a.x2 == 7 && a.y2 == 9 && co5300_ok(&a));
+    px_area_t b = {0, 0, 479, 39};
+    CHECK(co5300_ok(&b));
+    b.x1 = 1;
+    CHECK(!co5300_ok(&b));
+
+    /* Every rounded area stays valid and inside the panel at every angle. */
+    int bad = 0, outside = 0, tried = 0;
+    for (int32_t x1 = 0; x1 < n; x1 += 7) {
+        for (int32_t y1 = 0; y1 < n; y1 += 11) {
+            for (int32_t w = 1; x1 + w <= n; w += 53) {
+                for (int32_t h = 1; y1 + h <= n && h <= 40; h += 13) {
+                    for (int r = 0; r < 4; r++) {
+                        px_area_t q = {x1, y1, x1 + w - 1, y1 + h - 1};
+                        co5300_round(&q);
+                        if (q.x2 >= n || q.y2 >= n) {
+                            continue;
+                        }
+                        const int32_t qw = q.x2 - q.x1, qh = q.y2 - q.y1;
+                        port_rotate_area(&q, (lrot_t)r, n);
+                        tried++;
+                        bad += !co5300_ok(&q);
+                        outside += q.x1 < 0 || q.y1 < 0 || q.x2 >= n || q.y2 >= n;
+                        /* Same pixel count; 90 and 270 swap the sides. */
+                        if (r % 2 == 1) {
+                            bad += (q.x2 - q.x1) != qh || (q.y2 - q.y1) != qw;
+                        } else {
+                            bad += (q.x2 - q.x1) != qw || (q.y2 - q.y1) != qh;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    CHECK(tried > 10000);
+    CHECK(bad == 0);
+    CHECK(outside == 0);
+
+    /* Clockwise as the viewer sees it: the logical top-left pixel goes to
+     * top-right, bottom-right, then bottom-left of the panel. */
+    const int32_t want[4][2] = {{0, 0}, {479, 0}, {479, 479}, {0, 479}};
+    for (int k = 0; k < 4; k++) {
+        px_area_t p = {0, 0, 0, 0};
+        const lrot_t r = lrot_for_cw_turns(k);
+        port_rotate_area(&p, r, n);
+        CHECK(p.x1 == want[k][0] && p.y1 == want[k][1]);
+        CHECK(p.x1 == p.x2 && p.y1 == p.y2);
+        /* Touch follows: a touch where the port drew a pixel maps back to
+         * that pixel's logical position, for a few pixels per angle. */
+        const int32_t pts[3][2] = {{0, 0}, {37, 401}, {479, 12}};
+        for (int i = 0; i < 3; i++) {
+            px_area_t q = {pts[i][0], pts[i][1], pts[i][0], pts[i][1]};
+            port_rotate_area(&q, r, n);
+            int32_t tx = q.x1, ty = q.y1;
+            lvgl_touch_to_logical(r, n, &tx, &ty);
+            CHECK(tx == pts[i][0] && ty == pts[i][1]);
+        }
+    }
+    CHECK(lrot_for_cw_turns(4) == LROT_0 && lrot_for_cw_turns(-1) == LROT_90);
+}
+
 int main(void)
 {
     test_parse_real_frame();
@@ -1026,6 +1191,7 @@ int main(void)
     test_report_hello();
     test_tile_colors_and_levels();
     test_contrast();
+    test_moss_stands_apart();
     test_history_ring();
     test_history_heights();
     test_settings();
@@ -1034,6 +1200,9 @@ int main(void)
     test_button_held_at_start();
     test_button_clock_wrap();
     test_pmu_key();
+    test_turn_setting();
+    test_button_short();
+    test_co5300_rotation();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

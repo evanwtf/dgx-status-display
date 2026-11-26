@@ -166,7 +166,7 @@ static void num(tile_t *t, const char *label, float v, int decimals, tier_t tier
     snprintf(t->unit, sizeof(t->unit), "%s", unit);
     t->tier = tier;
     t->tone = tone_for(m, v);
-    t->hue = m == METRIC_NONE ? HUE_BRONZE : tone_hue(t->tone);
+    t->hue = m == METRIC_NONE ? HUE_MOSS : tone_hue(t->tone);
     t->fill = -1.0f;
     t->hist = HIST_NONE;
     t->is_text = false;
@@ -201,7 +201,7 @@ static void occupant(tile_t *t, const status_frame_t *f)
     t->label = "Running";
     t->unit[0] = '\0';
     t->tone = TONE_NEUTRAL;
-    t->hue = HUE_BRONZE;
+    t->hue = HUE_MOSS;
     t->fill = -1.0f;
     t->hist = HIST_NONE;
     if (f->occ[0] == '\0') {
@@ -261,7 +261,7 @@ void page_tiles(page_id_t p, const status_frame_t *f, tile_t out[TILES_PER_PAGE]
         num(&out[2], "Load avg", f->load1, 2, TIER_M, "", METRIC_NONE);
         out[3].label = "Up";
         out[3].tier = TIER_XL;
-        out[3].hue = HUE_BRONZE;
+        out[3].hue = HUE_MOSS;
         out[3].fill = -1.0f;
         out[3].hist = HIST_NONE;
         fmt_uptime_tile(f->up_s, out[3].value, sizeof(out[3].value), out[3].unit,

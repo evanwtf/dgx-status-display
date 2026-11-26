@@ -2,9 +2,16 @@
  * Host preview: render the real view.c with the same LVGL version and the
  * same LVGL config as the firmware, into 480x480 PNGs. No SDL, no board.
  *
- * It also checks that numbers do not move as they tick: for each tile tier,
- * two values of different length must put their last digit in the same
- * column. A failure exits 1.
+ * It draws the way the board does: partial buffers of DRAW_LINES lines, the
+ * CO5300 rounder on every invalidated area, and esp_lvgl_port's software
+ * rotation into a panel framebuffer. The PNGs show the panel.
+ *
+ * Checks (a failure exits 1):
+ * - numbers do not move as they tick: for each tile tier, two values of
+ *   different length put their last digit in the same column;
+ * - every flushed window, after rotation, has even x1/y1 and odd x2/y2;
+ * - every lit pixel sits inside the panel's rounded outline, at every
+ *   burn-in orbit offset and every rotation.
  *
  * Build and run: scripts/firmware.py preview (writes firmware/preview/).
  */
@@ -13,7 +20,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "logic/burnin.h"
 #include "logic/carousel.h"
+#include "logic/co5300.h"
 #include "logic/history.h"
 #include "logic/status.h"
 #include "lvgl.h"
@@ -22,7 +31,14 @@
 
 #define W 480
 
-static uint16_t s_fb[W * W];
+/* Same as the firmware: display.c DRAW_BUF_LINES. */
+#define DRAW_LINES 40
+/* Lit pixels must stay this far inside the panel outline. */
+#define OUTLINE_SAFE_PX 2
+static uint16_t s_draw[W * DRAW_LINES];
+static uint16_t s_rot[W * DRAW_LINES]; /* the port's draw_buffs[2] */
+static uint16_t s_fb[W * W];           /* the panel */
+static int s_bad_windows;
 static uint8_t s_rgb[W * W * 3];
 static int s_failed;
 static chart_style_t s_style = CHART_LEVEL;
@@ -38,7 +54,7 @@ static bool preview_heights(hist_metric_t m, const status_frame_t *f, int height
 #define HALF (W / 2)
 #define SEP 8
 #define SHEET_COLS 4
-#define SHEET_MAX 20
+#define SHEET_MAX 24
 #define SHEET_W (SHEET_COLS * HALF + (SHEET_COLS - 1) * SEP)
 static uint8_t s_sheet[SHEET_W * ((SHEET_MAX / SHEET_COLS) * (HALF + SEP)) * 3];
 static int s_sheet_n;
@@ -62,11 +78,100 @@ static uint32_t tick_cb(void)
     return 0;
 }
 
+/* display.c rounder_cb, through esp_lvgl_port's invalidate callback. */
+static void on_invalidate(lv_event_t *e)
+{
+    lv_area_t *a = lv_event_get_param(e);
+    if (a == NULL) {
+        return;
+    }
+    px_area_t p = {a->x1, a->y1, a->x2, a->y2};
+    co5300_round(&p);
+    a->x1 = p.x1;
+    a->y1 = p.y1;
+    a->x2 = p.x2;
+    a->y2 = p.y2;
+}
+
+/* esp_lvgl_port 2.9.0 lvgl_port_flush_callback, software-rotation path,
+ * writing into s_fb in place of esp_lcd_panel_draw_bitmap. */
 static void flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
 {
-    (void)area;
-    (void)px;
+    const lv_display_rotation_t rot = lv_display_get_rotation(d);
+    const int32_t ww = lv_area_get_width(area), hh = lv_area_get_height(area);
+    px_area_t out = {area->x1, area->y1, area->x2, area->y2};
+    const uint16_t *src = (const uint16_t *)px;
+    if (rot != LV_DISPLAY_ROTATION_0) {
+        const lv_color_format_t cf = lv_display_get_color_format(d);
+        const uint32_t w_stride = lv_draw_buf_width_to_stride((uint32_t)ww, cf);
+        const uint32_t h_stride = lv_draw_buf_width_to_stride((uint32_t)hh, cf);
+        if (rot == LV_DISPLAY_ROTATION_180) {
+            lv_draw_sw_rotate(px, s_rot, hh, ww, (int32_t)h_stride, (int32_t)h_stride, rot, cf);
+        } else {
+            lv_draw_sw_rotate(px, s_rot, ww, hh, (int32_t)w_stride, (int32_t)h_stride, rot, cf);
+        }
+        port_rotate_area(&out, (lrot_t)rot, W);
+        src = s_rot;
+    }
+    if (!co5300_ok(&out)) {
+        if (s_bad_windows++ == 0) {
+            fprintf(stderr, "FAIL window (%d,%d)-(%d,%d) at rotation %d\n", (int)out.x1,
+                    (int)out.y1, (int)out.x2, (int)out.y2, (int)rot);
+        }
+    }
+    const int32_t ow = out.x2 - out.x1 + 1;
+    for (int32_t y = out.y1; y <= out.y2; y++) {
+        if (y < 0 || y >= W || out.x1 < 0 || out.x2 >= W) {
+            continue;
+        }
+        memcpy(&s_fb[y * W + out.x1], &src[(y - out.y1) * ow], (size_t)ow * sizeof(uint16_t));
+    }
     lv_display_flush_ready(d);
+}
+
+/* Outside the panel's rounded outline, less OUTLINE_SAFE_PX, by how much
+ * (in px); 0 when inside. Pixel centres. */
+static double outside_by(int x, int y)
+{
+    const double r = VIEW_PANEL_CORNER_R, lim = r - OUTLINE_SAFE_PX;
+    const double cx = x + 0.5, cy = y + 0.5;
+    const double qx = cx < r ? r - cx : (cx > W - r ? cx - (W - r) : 0);
+    const double qy = cy < r ? r - cy : (cy > W - r ? cy - (W - r) : 0);
+    if (qx > 0 && qy > 0) {
+        const double d = sqrt(qx * qx + qy * qy);
+        return d > lim ? d - lim : 0;
+    }
+    const double e = fmin(fmin(cx, W - cx), fmin(cy, W - cy));
+    return e < OUTLINE_SAFE_PX ? OUTLINE_SAFE_PX - e : 0;
+}
+
+/* Count lit pixels outside the outline; report the worst one. */
+static int outline_misses(const char *what, int dx, int dy)
+{
+    int n = 0;
+    double worst = 0;
+    int wx = 0, wy = 0;
+    for (int y = 0; y < W; y++) {
+        for (int x = 0; x < W; x++) {
+            if (s_fb[y * W + x] == 0) {
+                continue;
+            }
+            const double o = outside_by(x, y);
+            if (o > 0) {
+                n++;
+                if (o > worst) {
+                    worst = o;
+                    wx = x;
+                    wy = y;
+                }
+            }
+        }
+    }
+    if (n > 0) {
+        fprintf(stderr, "FAIL outline %s shift (%d,%d): %d px outside, worst (%d,%d) by %.1f px\n",
+                what, dx, dy, n, wx, wy, worst);
+    }
+    return n;
 }
 
 static void render(const view_model_t *m)
@@ -74,6 +179,22 @@ static void render(const view_model_t *m)
     view_render(m);
     lv_obj_invalidate(lv_screen_active());
     lv_refr_now(NULL);
+}
+
+/* Render m at every burn-in offset and check the outline; leave it drawn
+ * at offset 0. */
+static void check_orbit(const char *what, const view_model_t *m)
+{
+    int fails = 0;
+    for (int k = 0; k < 16; k++) {
+        shift_t sh = burnin_shift((int64_t)k * SHIFT_PERIOD_MS);
+        view_set_shift(sh.dx, sh.dy);
+        render(m);
+        fails += outline_misses(what, sh.dx, sh.dy);
+    }
+    s_failed += fails > 0;
+    view_set_shift(0, 0);
+    render(m);
 }
 
 static void save(const char *dir, const char *name)
@@ -139,7 +260,7 @@ static void show(const char *dir, const char *name, const status_frame_t *f, lin
     m.fw_version = "preview";
     m.stack_free_rx = 2400;
     m.stack_free_ui = 3100;
-    render(&m);
+    check_orbit(name, &m);
     save(dir, name);
     add_to_sheet();
 }
@@ -227,8 +348,9 @@ int main(int argc, char **argv)
     lv_tick_set_cb(tick_cb);
     lv_display_t *d = lv_display_create(W, W);
     lv_display_set_color_format(d, LV_COLOR_FORMAT_RGB565);
-    lv_display_set_buffers(d, s_fb, NULL, sizeof(s_fb), LV_DISPLAY_RENDER_MODE_FULL);
+    lv_display_set_buffers(d, s_draw, NULL, sizeof(s_draw), LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(d, flush_cb);
+    lv_display_add_event_cb(d, on_invalidate, LV_EVENT_INVALIDATE_AREA, NULL);
     view_init(lv_screen_active(), NULL, NULL, NULL);
     view_set_animations(false);
 
@@ -294,6 +416,15 @@ int main(int argc, char **argv)
     show(dir, "17-history-hot-gpu", &hot, LINK_LIVE, 0, on_page(PAGE_GPU));
     show(dir, "18-detail-history", &real, LINK_LIVE, 0, detail);
 
+    /* KEY turns the screen clockwise; the panel shows it turned. */
+    s_style = CHART_LEVEL;
+    static const char *const turned[3] = {"19-turn-90", "20-turn-180", "21-turn-270"};
+    for (int k = 1; k <= 3; k++) {
+        lv_display_set_rotation(d, (lv_display_rotation_t)lrot_for_cw_turns(k));
+        show(dir, turned[k - 1], &busy, LINK_LIVE, 0, on_page(PAGE_GPU));
+    }
+    lv_display_set_rotation(d, LV_DISPLAY_ROTATION_0);
+
     /* Level and history side by side: one row per page. */
     {
         static uint8_t styles[(2 * HALF + SEP) * (3 * HALF + 2 * SEP) * 3];
@@ -355,6 +486,10 @@ int main(int argc, char **argv)
     check_column("memory", PAGE_HOST, 1, &f, &f.mem_used_gib, 7.2f, 121.9f);
     check_column("load", PAGE_HOST, 2, &f, &f.load1, 0.35f, 12.34f);
 
+    if (s_bad_windows > 0) {
+        fprintf(stderr, "FAIL %d flushed windows break the CO5300 rule\n", s_bad_windows);
+        s_failed++;
+    }
     printf("%s\n", s_failed ? "preview: FAILED" : "preview: ok");
     return s_failed ? 1 : 0;
 }

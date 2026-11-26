@@ -26,3 +26,8 @@ esp_err_t axp2101_panel_power_cycle(void);
  * Call from the LVGL task: touch uses the same bus there. *bits is 0 when
  * nothing happened. ESP_ERR_INVALID_STATE without a verified PMU. */
 esp_err_t axp2101_key_poll(uint8_t *bits);
+
+/* Read REG 22 now and report key power-off: "off", "ON", or "unknown" when
+ * the read fails or there is no PMU. For the once-a-minute log line: the
+ * boot log is gone before the host opens the port. */
+const char *axp2101_key_poweroff_state(void);

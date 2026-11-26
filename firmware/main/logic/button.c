@@ -38,3 +38,8 @@ button_event_t button_update(button_t *b, bool raw_pressed, uint32_t now_ms, uin
     }
     return BUTTON_UP;
 }
+
+bool button_is_short(uint32_t held_ms)
+{
+    return held_ms < BUTTON_SHORT_MS;
+}

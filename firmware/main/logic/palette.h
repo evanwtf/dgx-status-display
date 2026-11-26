@@ -14,7 +14,7 @@ typedef enum {
     HUE_TEAL = 0, /* GPU usage, CPU */
     HUE_INDIGO,   /* power, memory */
     HUE_VIOLET,   /* fans */
-    HUE_BRONZE,   /* running, up, load */
+    HUE_MOSS,     /* running, up, load: moss green, 95 deg, apart from amber */
     HUE_COOL,     /* temperatures: below the amber threshold */
     HUE_WARM,     /* at or above amber */
     HUE_HOT,      /* at or above red */

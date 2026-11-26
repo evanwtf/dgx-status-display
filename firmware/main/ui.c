@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "axp2101.h"
 #include "buttons.h"
 #include "display.h"
 #include "esp_app_desc.h"
@@ -16,6 +17,7 @@
 #include "esp_timer.h"
 #include "logic/burnin.h"
 #include "logic/carousel.h"
+#include "logic/co5300.h"
 #include "logic/link_state.h"
 #include "serial_rx.h"
 #include "settings_nvs.h"
@@ -41,6 +43,7 @@ static shift_t s_last_shift = {127, 127};
 static rx_snapshot_t s_rx;
 static view_model_t s_model;
 static chart_style_t s_style = CHART_LEVEL;
+static turn_t s_turn = TURN_0;
 /* Render time of one LVGL refresh: the slowest since the last log line. */
 static int64_t s_refr_start_us;
 static uint32_t s_refr_max_ms;
@@ -51,6 +54,29 @@ static int64_t now_ms(void)
 }
 
 /* Touch callbacks run in the LVGL task, like tick(). */
+static void apply_turn(void)
+{
+    if (!display_can_rotate()) {
+        return;
+    }
+    lv_display_set_rotation(lv_display_get_default(),
+                            (lv_display_rotation_t)lrot_for_cw_turns((int)s_turn));
+}
+
+/* KEY, short press: turn the screen 90 degrees clockwise and store it. Runs
+ * in the LVGL task (the buttons timer). */
+static void on_key_short(void)
+{
+    if (!display_can_rotate()) {
+        ESP_LOGW(TAG, "rotation unavailable: no RAM for the rotation buffer");
+        return;
+    }
+    s_turn = settings_turn_cw(settings_nvs_turn_store(), s_turn);
+    apply_turn();
+    s_last_change_ms = now_ms();
+    ESP_LOGI(TAG, "rotation: %d deg", turn_degrees(s_turn));
+}
+
 static void on_tap(void)
 {
     carousel_tap(&s_carousel, now_ms());
@@ -139,11 +165,13 @@ static void log_stack(int64_t now)
     esp_log_level_t level = near_miss ? ESP_LOG_WARN : ESP_LOG_INFO;
     ESP_LOG_LEVEL(level, TAG,
                   "free: stack rx %lu B, lvgl %lu B; lv heap %u%% used, largest %lu B; "
-                  "heap %lu B, min %lu B; slowest refresh %lu ms",
+                  "heap %lu B, min %lu B; slowest refresh %lu ms; turn %d; "
+                  "pwr hold power-off %s",
                   (unsigned long)rx, (unsigned long)s_lvgl_stack_free, (unsigned)mon.used_pct,
                   (unsigned long)mon.free_biggest_size, (unsigned long)esp_get_free_heap_size(),
                   (unsigned long)esp_get_minimum_free_heap_size(),
-                  (unsigned long)s_refr_max_ms);
+                  (unsigned long)s_refr_max_ms, turn_degrees(s_turn),
+                  axp2101_key_poweroff_state());
     s_refr_max_ms = 0;
 }
 
@@ -199,6 +227,9 @@ void ui_init(void)
     carousel_init(&s_carousel, now);
     s_last_change_ms = now;
     s_style = settings_chart_style(settings_nvs_chart_store());
+    s_turn = settings_turn(settings_nvs_turn_store());
+    apply_turn();
+    ESP_LOGI(TAG, "rotation: %d deg (stored)", turn_degrees(s_turn));
     view_init(lv_screen_active(), on_tap, on_long_press, on_chart_toggle);
     lv_display_add_event_cb(lv_display_get_default(), on_refresh_ready, LV_EVENT_REFR_READY,
                             NULL);
@@ -206,5 +237,5 @@ void ui_init(void)
                             NULL);
     tick(NULL);
     lv_timer_create(tick, UI_PERIOD_MS, NULL);
-    buttons_start();
+    buttons_start(on_key_short);
 }

@@ -17,7 +17,9 @@
  */
 #define W 480
 #define MARGIN 14
-#define STRIP_Y 6
+/* The strip sits low and inset so its corners clear the panel's curve at
+ * every burn-in offset (the preview checks it). */
+#define STRIP_Y 13
 #define GRID_Y 56
 #define GAP 8
 #define TILE_W ((W - 2 * MARGIN - GAP) / 2)          /* 222 */
@@ -30,11 +32,8 @@
 #define LABEL_Y 8
 #define UNIT_BOTTOM (TILE_H - 8)
 #define INNER_R 6
-/* The panel's own corner radius. Estimated from the module photos: there is
- * no published figure. The tiles' outer corners use it minus their inset, so
- * the curves are concentric. Tune it on the device. */
-#define PANEL_CORNER_R 54
-#define OUTER_R (PANEL_CORNER_R - MARGIN) /* 40 */
+/* Concentric with the panel corner (view.h). Tune that on the device. */
+#define OUTER_R (VIEW_PANEL_CORNER_R - MARGIN) /* 40 */
 #define EDGE_H 3
 #define FILL_ANIM_MS 400
 
@@ -257,10 +256,10 @@ static void build_tile(int i)
     int x = MARGIN + (i % 2) * (TILE_W + GAP);
     int y = GRID_Y + (i / 2) * (TILE_H + GAP);
     t->box = box(s_pages, x, y, TILE_W, TILE_H);
-    paint(t->box, hue_colors(HUE_BRONZE)->base, INNER_R);
+    paint(t->box, hue_colors(HUE_MOSS)->base, INNER_R);
 
     t->fill = box(t->box, 0, 0, TILE_W, 0);
-    paint(t->fill, hue_colors(HUE_BRONZE)->fill, INNER_R);
+    paint(t->fill, hue_colors(HUE_MOSS)->fill, INNER_R);
     lv_obj_align(t->fill, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     lv_obj_set_hidden(t->fill, true);
     t->fill_px = -1;
@@ -304,10 +303,10 @@ static void build_pages(void)
 
     /* Strip, drawn last so no mask can cover it: title left; stale age,
      * clock and link dot right. */
-    s_title = label(s_pages, &brl_32, COLOR_TITLE, MARGIN + 4, STRIP_Y + 4, 200,
+    s_title = label(s_pages, &brl_32, COLOR_TITLE, MARGIN + TILE_PAD, STRIP_Y + 4, 200,
                     LV_TEXT_ALIGN_LEFT);
     const int dot = 14;
-    const int dot_x = W - MARGIN - 4 - dot;
+    const int dot_x = W - MARGIN - TILE_PAD - dot; /* in line with the tile text */
     s_dot = box(s_pages, dot_x, STRIP_Y + 18, dot, dot);
     paint(s_dot, COLOR_DOT_LIVE, LV_RADIUS_CIRCLE);
     s_clock = label(s_pages, &brl_30, COLOR_CLOCK, dot_x - 12 - 80, STRIP_Y + 6, 80,

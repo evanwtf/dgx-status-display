@@ -7,6 +7,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* A press released before this is a short press. */
+#define BUTTON_SHORT_MS 1000
+
 /* The raw level must stay the same this long before the state changes. */
 #define BUTTON_DEBOUNCE_MS 30
 
@@ -32,3 +35,6 @@ void button_init(button_t *b, bool raw_pressed, uint32_t now_ms);
  * *held_ms (when not NULL) is the debounced press length. Clock wrap is
  * safe: all times are differences of uint32_t. */
 button_event_t button_update(button_t *b, bool raw_pressed, uint32_t now_ms, uint32_t *held_ms);
+
+/* True for a press of under BUTTON_SHORT_MS (from BUTTON_UP's held_ms). */
+bool button_is_short(uint32_t held_ms);

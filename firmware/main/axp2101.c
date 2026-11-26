@@ -83,6 +83,15 @@ static esp_err_t key_setup(void)
     return ESP_OK;
 }
 
+const char *axp2101_key_poweroff_state(void)
+{
+    uint8_t r22 = 0;
+    if (!s_verified || rd(PMU_REG_PWROFF_EN, &r22) != ESP_OK) {
+        return "unknown";
+    }
+    return (r22 & PMU_PWROFF_KEY_BIT) ? "ON" : "off";
+}
+
 esp_err_t axp2101_key_poll(uint8_t *bits)
 {
     *bits = 0;

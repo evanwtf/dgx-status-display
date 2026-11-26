@@ -24,3 +24,26 @@ const char *chart_style_name(chart_style_t c)
 {
     return c == CHART_HISTORY ? "2-minute history" : "Level";
 }
+
+turn_t settings_turn(const settings_store_t *s)
+{
+    uint8_t v = 0;
+    if (s == NULL || s->load == NULL || !s->load(s->ctx, &v) || v > TURN_270) {
+        return TURN_0;
+    }
+    return (turn_t)v;
+}
+
+turn_t settings_turn_cw(const settings_store_t *s, turn_t current)
+{
+    const turn_t next = (turn_t)(((unsigned)current + 1u) % 4u);
+    if (s != NULL && s->save != NULL) {
+        (void)s->save(s->ctx, (uint8_t)next);
+    }
+    return next;
+}
+
+int turn_degrees(turn_t t)
+{
+    return 90 * (int)t;
+}

@@ -1,17 +1,20 @@
 #include "display.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "axp2101.h"
 #include "board.h"
 #include "driver/i2c_master.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_sh8601.h"
 #include "esp_lcd_touch_cst9217.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#include "logic/co5300.h"
 
 static const char *TAG = "display";
 
@@ -59,12 +62,37 @@ static esp_lcd_panel_handle_t s_panel;
 
 /* The CO5300 needs every flush area to start on an even pixel and end on an
  * odd one. Same rounding as the Waveshare demo's rounder_event_cb. */
+static bool s_can_rotate;
+
+/* True when n blocks of `bytes` of DMA RAM can be allocated at once: the
+ * port's two draw buffers and its rotation buffer (same caps as the port). */
+static bool room_for_buffers(size_t bytes, int n)
+{
+    void *b[3] = {NULL, NULL, NULL};
+    bool ok = n <= 3;
+    for (int i = 0; ok && i < n; i++) {
+        b[i] = heap_caps_malloc(bytes, MALLOC_CAP_DMA);
+        ok = b[i] != NULL;
+    }
+    for (int i = 0; i < 3; i++) {
+        free(b[i]);
+    }
+    return ok;
+}
+
 static void rounder_cb(lv_area_t *area)
 {
-    area->x1 = (area->x1 >> 1) << 1;
-    area->y1 = (area->y1 >> 1) << 1;
-    area->x2 = ((area->x2 >> 1) << 1) + 1;
-    area->y2 = ((area->y2 >> 1) << 1) + 1;
+    px_area_t a = {area->x1, area->y1, area->x2, area->y2};
+    co5300_round(&a);
+    area->x1 = a.x1;
+    area->y1 = a.y1;
+    area->x2 = a.x2;
+    area->y2 = a.y2;
+}
+
+bool display_can_rotate(void)
+{
+    return s_can_rotate;
 }
 
 void display_set_brightness(uint8_t level)
@@ -155,7 +183,7 @@ esp_err_t display_init(void)
     const lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     ESP_RETURN_ON_ERROR(lvgl_port_init(&port_cfg), TAG, "lvgl port");
 
-    const lvgl_port_display_cfg_t disp_cfg = {
+    lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = s_io,
         .panel_handle = s_panel,
         .buffer_size = BOARD_LCD_H_RES * DRAW_BUF_LINES,
@@ -166,16 +194,27 @@ esp_err_t display_init(void)
         .rounder_cb = rounder_cb,
         .color_format = LV_COLOR_FORMAT_RGB565,
         .rotation = {.swap_xy = false, .mirror_x = false, .mirror_y = false},
-        .flags = {.buff_dma = true, .swap_bytes = true},
+        /* Software rotation for the KEY button (ui.c). The panel cannot
+         * rotate: the sh8601 driver rejects swap_xy and mirror_y, so not
+         * even 180 deg is possible in hardware. The port rotates each flushed
+         * area into one extra buffer of buffer_size pixels (38,400 B of DMA
+         * RAM) and skips the copy at 0 deg. LVGL rounds the logical area
+         * (rounder_cb); on a 480 px side, even x1/y1 and odd x2/y2 stay so
+         * after any quarter turn (test_logic.c: test_co5300_rotation).
+         * sw_rotate also skips the port's swap_xy and mirror calls: the
+         * mirror call rewrote MADCTL with the init table's own 0x30, and
+         * swap_xy only logged "not supported". */
+        .flags = {.buff_dma = true, .swap_bytes = true, .sw_rotate = true},
     };
-    /* esp_lvgl_port calls esp_lcd_panel_swap_xy(panel, false) for rotation 0
-     * whatever the config, and the sh8601 driver logs "swap_xy is not
-     * supported" for any call. The panel needs no swap. sw_rotate would skip
-     * the call, but also the mirror call that sets the panel's orientation
-     * today, so keep the behavior and only hide that one log line. */
-    esp_log_level_set("sh8601", ESP_LOG_NONE);
+    /* The port allocates the rotation buffer after it creates the LVGL
+     * display, and on failure returns that display with its context freed.
+     * So check for room first: without it, start with a fixed screen. */
+    if (!room_for_buffers(disp_cfg.buffer_size * sizeof(uint16_t), 3)) {
+        ESP_LOGE(TAG, "no RAM for the rotation buffer; the screen cannot turn");
+        disp_cfg.flags.sw_rotate = false;
+    }
     lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);
-    esp_log_level_set("sh8601", ESP_LOG_INFO);
+    s_can_rotate = disp != NULL && disp_cfg.flags.sw_rotate;
     ESP_RETURN_ON_FALSE(disp != NULL, ESP_FAIL, TAG, "lvgl display");
 
     if (touch != NULL) {

@@ -6,42 +6,43 @@
 
 static const char *TAG = "settings";
 static const char *NS = "dgxstatus";
-static const char *KEY_CHART = "chart";
 static bool s_ready;
 
+/* ctx is the NVS key. */
 static bool nvs_load_u8(void *ctx, uint8_t *out)
 {
-    (void)ctx;
+    const char *key = ctx;
     nvs_handle_t h;
     if (!s_ready || nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
         return false;
     }
-    esp_err_t err = nvs_get_u8(h, KEY_CHART, out);
+    esp_err_t err = nvs_get_u8(h, key, out);
     nvs_close(h);
     return err == ESP_OK;
 }
 
 static bool nvs_save_u8(void *ctx, uint8_t value)
 {
-    (void)ctx;
+    const char *key = ctx;
     nvs_handle_t h;
     if (!s_ready || nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
         return false;
     }
-    esp_err_t err = nvs_set_u8(h, KEY_CHART, value);
+    esp_err_t err = nvs_set_u8(h, key, value);
     if (err == ESP_OK) {
         err = nvs_commit(h);
     }
     nvs_close(h);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "saving the chart style failed: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "saving %s failed: %s", key, esp_err_to_name(err));
     }
     return err == ESP_OK;
 }
 
-static const settings_store_t s_store = {nvs_load_u8, nvs_save_u8, NULL};
+static const settings_store_t s_chart = {nvs_load_u8, nvs_save_u8, (void *)"chart"};
+static const settings_store_t s_turn = {nvs_load_u8, nvs_save_u8, (void *)"turn"};
 
-const settings_store_t *settings_nvs_chart_store(void)
+static void ensure_ready(void)
 {
     if (!s_ready) {
         esp_err_t err = nvs_flash_init();
@@ -57,5 +58,16 @@ const settings_store_t *settings_nvs_chart_store(void)
                      esp_err_to_name(err));
         }
     }
-    return &s_store;
+}
+
+const settings_store_t *settings_nvs_chart_store(void)
+{
+    ensure_ready();
+    return &s_chart;
+}
+
+const settings_store_t *settings_nvs_turn_store(void)
+{
+    ensure_ready();
+    return &s_turn;
 }

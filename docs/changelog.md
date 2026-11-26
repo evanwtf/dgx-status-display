@@ -11,6 +11,14 @@ After the first board test:
   PWR no longer switches the board off: the firmware clears the PMU's key
   power-off bit and sets its hold time to the 10 s maximum. To switch the
   board off, unplug it.
+- Rotation: a short KEY press turns the screen 90° clockwise, stored in NVS;
+  touch follows. Software rotation (the panel cannot rotate) costs one
+  38,400 B DMA buffer; without room for it the board starts with a fixed
+  screen. The once-a-minute `free:` line reports the angle and
+  re-reads the PMU's key power-off bit.
+- Design: Running, Up and Load use moss green, apart from the warm
+  temperature amber. The top strip sits lower and further in, clear of the
+  panel's rounded corners at every burn-in offset; the preview checks it.
 - Design pass: colored tiles whose level fill (or, as an option, a 2-minute
   history chart) shows the reading; temperature tiles change hue at the
   thresholds; Barlow Semi Condensed for words; a WCAG contrast test for

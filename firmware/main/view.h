@@ -16,6 +16,11 @@
 #include "logic/tiles.h"
 #include "lvgl.h"
 
+/* The panel's own corner radius. Estimated from the module photos: there is
+ * no published figure. The tiles' outer corners are concentric with it, and
+ * the preview checks that every lit pixel stays inside it. */
+#define VIEW_PANEL_CORNER_R 54
+
 typedef struct {
     view_kind_t kind;
     page_id_t page;

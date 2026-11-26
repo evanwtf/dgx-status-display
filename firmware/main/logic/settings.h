@@ -26,3 +26,18 @@ chart_style_t settings_chart_style(const settings_store_t *s);
  * even when the save fails (it then lasts until reboot). */
 chart_style_t settings_toggle_chart_style(const settings_store_t *s, chart_style_t current);
 const char *chart_style_name(chart_style_t c);
+
+/* Screen rotation, in clockwise quarter turns as the viewer sees it. */
+typedef enum {
+    TURN_0 = 0,
+    TURN_90 = 1,
+    TURN_180 = 2,
+    TURN_270 = 3,
+} turn_t;
+
+/* The stored rotation, or TURN_0 when nothing valid is stored. */
+turn_t settings_turn(const settings_store_t *s);
+/* Turn 90 degrees clockwise and store it. Returns the new rotation; it
+ * applies even when the save fails. */
+turn_t settings_turn_cw(const settings_store_t *s, turn_t current);
+int turn_degrees(turn_t t);

@@ -7,3 +7,6 @@
  * store for the chart style. Always returns a store; on NVS failure it
  * loads nothing and saves nothing, so the default applies. */
 const settings_store_t *settings_nvs_chart_store(void);
+
+/* The store for the screen rotation (key "turn"). Same rules. */
+const settings_store_t *settings_nvs_turn_store(void);

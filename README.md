@@ -217,6 +217,10 @@ unit.
   amber STALE with the age).
 - **Touch:** a tap moves to the next page and restarts the 10-second timer.
   A long press opens every temperature sensor; a tap or 20 seconds goes back.
+- **Buttons:** a short press of **KEY** (released within 1 s) turns the screen 90° clockwise, so the board can stand on any
+  edge. The angle survives a reboot (NVS), and touch follows it. BOOT and PWR
+  have no action; the board logs every press. Holding PWR does not switch
+  the board off: unplug it.
 - **NO DATA** (no frame for over 10 s): the carousel stops; a black, dimmed
   screen says "No data from the DGX" and how long ago the last frame came.
 - **Type:** values in JetBrains Mono, right-aligned against a fixed edge with

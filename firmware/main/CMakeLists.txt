@@ -29,6 +29,7 @@ idf_component_register(
         "logic/settings.c"
         "logic/button.c"
         "logic/pmu_key.c"
+        "logic/co5300.c"
     INCLUDE_DIRS "." "logic"
     REQUIRES
         esp_driver_i2c
