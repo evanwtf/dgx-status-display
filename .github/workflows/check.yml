@@ -39,22 +39,14 @@ jobs:
       - run: echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - run: uv sync --frozen
-      - name: ruff
-        run: |
-          status=0
-          uv run --frozen ruff format --check . || status=$?
-          uv run --frozen ruff check . || status=$?
-          exit "$status"
-      - run: uv run --frozen mypy
-      # Default run: the NVML integration test skips cleanly (no GPU here).
-      - run: uv run --frozen pytest -q -rs
-      # Every suite CI can run must run. Deselect the ones it cannot, then
-      # fail on any skip in the rest.
-      - name: fail on skipped tests
-        run: |
-          out=$(uv run --frozen pytest -q -rs -m 'not integration and not slow' 2>&1)
-          echo "$out"
-          if echo "$out" | grep -q SKIPPED; then echo "unexpected skip"; exit 1; fi
+      # The Makefile holds the steps, so CI and `make check` cannot drift:
+      # ruff format --check, ruff check, mypy, pytest -q -rs (the NVML
+      # integration test skips cleanly; no GPU here), then pytest without the
+      # hardware suites, which fails on any skip. It runs every step and
+      # fails at the end if any failed. tests/test_makefile.py dry-runs
+      # every other target.
+      - run: make --version | head -n 1
+      - run: make check
 
   gitleaks:
     # Scan every commit, not only the files: this repo is public.
