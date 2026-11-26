@@ -1,8 +1,17 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.0.1 (2026-11-26)
 
-First version: phase 1, USB serial.
+The first release. It is phase 1: a DGX Spark sends its status over USB
+serial, and a Waveshare ESP32-C6-Touch-AMOLED-2.16 shows it. There is no
+Wi-Fi yet. The release holds the daemon (a wheel and an sdist) and the
+firmware: one merged image to flash at 0x0, the separate images with
+`flash_args`, and the ELF to decode a core dump. `SHA256SUMS` covers every
+file.
+
+- Releases: a `v*` tag publishes a GitHub release. The workflow refuses a
+  tag that differs from any declared version, and takes the notes from this
+  file (`scripts/release_check.py`).
 
 After the first board test:
 
@@ -52,7 +61,7 @@ First cut:
   MemAvailable; CPU % from consecutive /proc/stat samples; load, uptime;
   fans from the `nvfanread` hwmon device; board, NVMe and NIC temperatures.
   No SM clock. It reopens the serial port with backoff after an unplug.
-- Firmware 0.1.0 for the Waveshare ESP32-C6-Touch-AMOLED-2.16: overview and
+- Firmware for the Waveshare ESP32-C6-Touch-AMOLED-2.16: overview and
   detail pages, LIVE / STALE / NO DATA, burn-in care (pixel shift, gray text,
   dimming), a hello line with the firmware version. Pins and panel init come
   from Waveshare's demo code.

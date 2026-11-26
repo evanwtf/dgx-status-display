@@ -31,8 +31,9 @@ ESP32-C6-Touch-AMOLED-2.16. ESP-IDF firmware draws it with LVGL.
 | `src/dgx_status/` | The daemon. Parsers (`procfs.py`, `sysfs.py`, `occupant.py`), NVML (`gpu.py`), frame encoder (`frame.py`), `collector.py`, `serial_link.py`, `daemon.py`, `cli.py`. |
 | `tests/` | One file per module. `fixtures/spark/` holds /proc and /sys files copied from a DGX. No hook may rewrite them. |
 | `firmware/` | ESP-IDF project. `main/logic/` is pure C (frames, formatting, tiles, carousel, palette, history, settings) with host tests in `firmware/test/`. `main/view.c` is LVGL only; `firmware/test/preview/` renders it on the host. `main/fonts/` is generated. `main/board.h` cites the pin sources. |
-| `scripts/` | `firmware.py` (build, test and preview in the pinned IDF image), `gen_fonts.py` (the value fonts), `check_public.py` (the public-repo guard), `capture_fixtures.py`. |
+| `scripts/` | `firmware.py` (build, test, merge and preview in the pinned IDF image), `gen_fonts.py` (the value fonts), `check_public.py` (the public-repo guard), `release_check.py` (the release refusals: tag against the three versions, changelog notes, merged image), `capture_fixtures.py`. |
 | `deploy/` | The systemd unit. |
+| `.github/workflows/` | `check.yml` (every push to main and every PR; also called by the release), `release.yml` (a `v*` tag: refusals, checks, build, publish). |
 | `docs/` | `protocol.md` (the wire format), `plan.md`, `changelog.md`. |
 
 ## Commands
@@ -49,6 +50,26 @@ uv run python scripts/firmware.py test     # C unit tests, ASan + UBSan
 uv run python scripts/firmware.py build    # idf.py build, zero warnings in main/
 uv run python scripts/firmware.py preview  # render the UI to firmware/preview/*.png
 ```
+
+Before a release tag (README, "Cut a release"):
+
+```bash
+uv run python scripts/release_check.py version vX.Y.Z    # tag = all three versions
+uv run python scripts/release_check.py notes X.Y.Z "$(mktemp)"
+uv run python scripts/firmware.py merge    # one image for 0x0 (after build)
+```
+
+## Releases
+
+- **The version lives in three places:** `pyproject.toml`,
+  `src/dgx_status/__init__.py` and `PROJECT_VER` in
+  `firmware/CMakeLists.txt`. Change all three together;
+  `tests/test_release_check.py` keeps them equal.
+- **Notes come from `docs/changelog.md`,** never from the tag message. A
+  version needs a `## X.Y.Z (YYYY-MM-DD)` section before its tag; the check
+  refuses a missing, empty, duplicate or "unreleased" one.
+- **Agents do not push tags** unless a person asks. A tag publishes a public
+  release.
 
 ## Rules for this repo
 

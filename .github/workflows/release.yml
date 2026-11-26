@@ -1,0 +1,159 @@
+name: release
+
+# A v* tag publishes a GitHub release. To cut one: edit the changelog
+# section, set the three versions, push, then
+#   git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
+# The notes come from docs/changelog.md, never from the tag message: the
+# shell expands backticks in a hand-typed `git tag -m`.
+#
+# Only a push of a tag runs this, and a tag push needs write access, so a
+# fork cannot start it on the self-hosted runner.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  # Cheap refusals first, before the long build.
+  preflight:
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - run: uv sync --frozen
+      - name: the tag equals every declared version
+        run: uv run --frozen python scripts/release_check.py version "$TAG"
+      - name: the changelog has notes for this version
+        run: |
+          uv run --frozen python scripts/release_check.py notes "${TAG#v}" "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+      - name: no release exists for this tag
+        run: |
+          if out=$(gh api "repos/$GH_REPO/releases/tags/$TAG" 2>&1); then
+            echo "a release for $TAG exists already"
+            exit 1
+          fi
+          case "$out" in
+            *"HTTP 404"*) echo "no release for $TAG yet" ;;
+            *) echo "$out"; exit 1 ;;
+          esac
+
+  # The same jobs as a push to main: lint, types, tests, gitleaks, the
+  # firmware tests, build, preview and fonts. (A job that calls a reusable
+  # workflow takes no timeout-minutes; each called job sets its own.)
+  check:
+    needs: preflight
+    uses: ./.github/workflows/check.yml
+    permissions:
+      contents: read
+
+  build:
+    needs: preflight
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - run: uv sync --frozen
+      # Both run in the pinned espressif/idf image (scripts/firmware.py).
+      - name: idf.py build
+        run: uv run --frozen python scripts/firmware.py build
+      - name: merge the images into one for 0x0
+        run: uv run --frozen python scripts/firmware.py merge
+      - name: the merged image equals its parts
+        run: |
+          uv run --frozen python scripts/release_check.py merged \
+            firmware/build firmware/build/dgx_status_display-merged.bin
+      - name: wheel and sdist
+        run: uv build --out-dir dist
+      - name: stage the assets
+        run: |
+          version="${TAG#v}"
+          out="$RUNNER_TEMP/release"
+          rm -rf "$out"
+          mkdir -p "$out"
+          cp firmware/build/dgx_status_display-merged.bin \
+            "$out/dgx-status-display-$version-esp32c6-merged.bin"
+          cp firmware/build/dgx_status_display.elf "$out/dgx_status_display-$version.elf"
+          # The zip holds one folder with the paths flash_args names, so
+          # `esptool.py write_flash @flash_args` works inside it. (The
+          # zipfile CLI drops the folders of a file it is given, so it gets
+          # the whole folder.)
+          pkg="dgx-status-display-$version-esp32c6"
+          stage="$RUNNER_TEMP/zip/$pkg"
+          rm -rf "$RUNNER_TEMP/zip"
+          mkdir -p "$stage/bootloader" "$stage/partition_table"
+          cp firmware/build/bootloader/bootloader.bin "$stage/bootloader/"
+          cp firmware/build/partition_table/partition-table.bin "$stage/partition_table/"
+          cp firmware/build/dgx_status_display.bin firmware/build/flash_args "$stage/"
+          (cd "$RUNNER_TEMP/zip" && uv run --frozen --project "$GITHUB_WORKSPACE" \
+            python -m zipfile -c "$out/$pkg.zip" "$pkg")
+          cp "dist/dgx_status-$version-py3-none-any.whl" "dist/dgx_status-$version.tar.gz" "$out/"
+          (cd "$out" && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+          echo "ASSETS=$out" >> "$GITHUB_ENV"
+      # A hand-off to the publish job only: one day is enough.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ github.ref_name }}
+          path: ${{ env.ASSETS }}/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [preflight, check, build]
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - run: uv sync --frozen
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ github.ref_name }}
+          path: ${{ runner.temp }}/release
+      - name: check the assets
+        run: |
+          cd "$RUNNER_TEMP/release"
+          sha256sum -c SHA256SUMS
+          ls -l
+      - name: notes from the changelog
+        run: uv run --frozen python scripts/release_check.py notes "${TAG#v}" "$RUNNER_TEMP/notes.md"
+      # Again here: another run may have published while this one built.
+      - name: no release exists for this tag
+        run: |
+          if out=$(gh api "repos/$GH_REPO/releases/tags/$TAG" 2>&1); then
+            echo "a release for $TAG exists already"
+            exit 1
+          fi
+          case "$out" in
+            *"HTTP 404"*) echo "no release for $TAG yet" ;;
+            *) echo "$out"; exit 1 ;;
+          esac
+      - name: publish
+        run: |
+          gh release create "$TAG" --verify-tag --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" "$RUNNER_TEMP"/release/*

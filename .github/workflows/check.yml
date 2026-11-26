@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml runs these same checks on a v* tag before it publishes.
+  workflow_call:
 
 # Public repo: the token can only read. No job needs a secret.
 permissions:

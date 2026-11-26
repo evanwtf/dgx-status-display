@@ -2,6 +2,7 @@
 
     uv run python scripts/firmware.py build   # idf.py build
     uv run python scripts/firmware.py size    # idf.py size (after build)
+    uv run python scripts/firmware.py merge   # one image to flash at 0x0 (after build)
     uv run python scripts/firmware.py test    # host unit tests (make -C firmware/test)
     uv run python scripts/firmware.py preview # render the UI to firmware/preview/*.png
     uv run python scripts/firmware.py coredump --port /dev/ttyACM0
@@ -15,6 +16,11 @@ The container runs as the calling user (`-u UID:GID`, `HOME=/tmp`, `--init`),
 so every file it writes in the checkout is owned by that user. The one place
 under /opt/esp the component manager writes, root_managed_components, gets a
 tmpfs owned by that user. Nothing else in the image needs to be writable.
+
+`merge` writes firmware/build/dgx_status_display-merged.bin with
+`esptool.py merge_bin` from the build's flash_args: the bootloader, the
+partition table and the app in one file, 0xFF in the gaps, to flash at 0x0.
+The release workflow publishes it.
 
 Every step except `coredump --port` leaves serial ports alone. Flashing is a
 separate, manual step (README).
@@ -51,6 +57,7 @@ IDF_IMAGE = (
 )
 REPO = Path(__file__).resolve().parent.parent
 ELF = "firmware/build/dgx_status_display.elf"
+MERGED = "firmware/build/dgx_status_display-merged.bin"
 ELF_ARCHIVE = "firmware/elf"
 CORE_DIR = "firmware/coredump"
 
@@ -58,6 +65,11 @@ COMMANDS = {
     "build": "cd firmware && idf.py build",
     "size": "cd firmware && idf.py size",
     "test": "make -C firmware/test",
+    # merge_bin opens no port: it only reads the build's files.
+    "merge": (
+        "cd firmware/build && esptool.py --chip esp32c6 merge_bin"
+        " -o dgx_status_display-merged.bin @flash_args"
+    ),
     # Host render of the real UI code into firmware/preview/*.png. Needs the
     # LVGL component and sdkconfig.h, which `idf.py reconfigure` provides.
     "preview": (

@@ -1,6 +1,7 @@
 # dgx-status-display
 
 [![check](https://github.com/evanwtf/dgx-status-display/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/evanwtf/dgx-status-display/actions/workflows/check.yml?query=branch%3Amain)
+[![Release](https://img.shields.io/github/v/release/evanwtf/dgx-status-display)](https://github.com/evanwtf/dgx-status-display/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3130/)
 [![ESP-IDF v5.5.6](https://img.shields.io/badge/ESP--IDF-v5.5.6-E7352C.svg?logo=espressif&logoColor=white)](https://github.com/espressif/esp-idf/releases/tag/v5.5.6)
@@ -128,7 +129,52 @@ journalctl -u dgx-status -f
 ```
 
 Within a few seconds the log shows `connected to /dev/serial/by-id/...`, and
-`display says hello: dgx-status-display, fw 0.1.0`, and the screen shows LIVE.
+`display says hello: dgx-status-display, fw 0.0.1`, and the screen shows LIVE.
+
+## Install from a release
+
+Each [release](https://github.com/evanwtf/dgx-status-display/releases) holds
+the built firmware and the daemon, so you need no build. Do steps 1 and 3 of
+the bootstrap first: set the variables and back up the factory firmware.
+Here `$REPO` is a plain folder, not a clone, so create it before step 3
+(`mkdir -p "$REPO"`). These commands then take the place of steps 2 and 4.
+
+Download the files and check them:
+
+```bash
+export VERSION=0.0.1
+mkdir -p "$REPO/release" "$REPO/deploy" && cd "$REPO/release"
+BASE=https://github.com/evanwtf/dgx-status-display/releases/download/v$VERSION
+for f in SHA256SUMS "dgx-status-display-$VERSION-esp32c6-merged.bin" \
+    "dgx_status-$VERSION-py3-none-any.whl"; do curl -fsSLO "$BASE/$f"; done
+sha256sum --ignore-missing -c SHA256SUMS    # each file must say OK
+```
+
+Flash the merged image at 0x0. It holds the bootloader, the partition table
+and the app:
+
+```bash
+docker run --rm --device="$DEV" -v "$REPO/release:/release:ro" -w /release "$IDF_IMAGE" \
+  esptool.py --chip esp32c6 -p "$DEV" -b 460800 --before default_reset --after hard_reset \
+  write_flash 0x0 "dgx-status-display-$VERSION-esp32c6-merged.bin"
+```
+
+Install the daemon in `$REPO/.venv`, the path the service runs, and get the
+service template from the same tag:
+
+```bash
+uv venv --python 3.13 "$REPO/.venv"
+uv pip install --python "$REPO/.venv" "$REPO/release/dgx_status-$VERSION-py3-none-any.whl"
+"$REPO/.venv/bin/dgx-status" --version
+"$REPO/.venv/bin/dgx-status" --dry-run --once
+curl -fsSL -o "$REPO/deploy/dgx-status.service" \
+  "https://raw.githubusercontent.com/evanwtf/dgx-status-display/v$VERSION/deploy/dgx-status.service"
+```
+
+Then install the service (step 5). The release also has
+`dgx-status-display-$VERSION-esp32c6.zip` (the separate images and
+`flash_args`), the sdist, and `dgx_status_display-$VERSION.elf` to decode a
+core dump (`scripts/firmware.py coredump --elf`, in a clone).
 
 ## Serial port access
 
@@ -254,6 +300,32 @@ fails if a value's last digit changes column between two values.
 
 `tests/fixtures/spark/` holds /proc and /sys files copied from a DGX Spark.
 `scripts/capture_fixtures.py` copies a fresh set, read-only.
+
+### Cut a release
+
+A `v*` tag runs `.github/workflows/release.yml`. It refuses the tag unless
+the three declared versions equal it and `docs/changelog.md` has one
+non-empty section for it that does not say "unreleased". It runs every
+check, builds the firmware and the wheel, and publishes the release with the
+notes from the changelog. The tag message holds no notes.
+
+1. Rename the changelog's top section to `## X.Y.Z (YYYY-MM-DD)`.
+2. Set `X.Y.Z` in `pyproject.toml`, `src/dgx_status/__init__.py` and
+   `PROJECT_VER` in `firmware/CMakeLists.txt`, then run `uv lock`.
+3. Check, commit and push to `main`:
+
+   ```bash
+   export VERSION=X.Y.Z
+   uv run python scripts/release_check.py version "v$VERSION"
+   uv run python scripts/release_check.py notes "$VERSION" "$(mktemp)"
+   git push origin main
+   ```
+
+4. Tag and push the tag:
+
+   ```bash
+   git tag -a "v$VERSION" -m "v$VERSION" && git push origin "v$VERSION"
+   ```
 
 ## Credits and license
 

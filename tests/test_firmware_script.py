@@ -6,7 +6,14 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from firmware import COMMANDS, IDF_IMAGE, archive_elf, coredump_argv, docker_argv
+from firmware import (
+    COMMANDS,
+    IDF_IMAGE,
+    MERGED,
+    archive_elf,
+    coredump_argv,
+    docker_argv,
+)
 
 
 def test_image_is_pinned_by_tag_and_digest() -> None:
@@ -29,14 +36,24 @@ def test_argv_runs_as_the_calling_user() -> None:
 
 
 def test_no_step_touches_a_serial_port() -> None:
-    """Flashing stays a manual step. No --device, no flash, no monitor."""
+    """Flashing stays a manual step. No --device, no port, no flash command."""
     for cmd in COMMANDS.values():
         argv = docker_argv(cmd, Path("/repo"), 1, 1)
         joined = " ".join(argv)
         assert "--device" not in joined
-        assert "flash" not in joined
-        assert "monitor" not in joined
-        assert "/dev/tty" not in joined
+        assert "/dev/" not in joined
+        assert "--port" not in joined
+        assert " -p " not in joined
+        for word in ("write_flash", "read_flash", "erase", "idf.py flash", "monitor"):
+            assert word not in joined
+
+
+def test_merge_step_merges_the_build_from_flash_args() -> None:
+    """One image for 0x0, made from the same file list the build writes."""
+    cmd = COMMANDS["merge"]
+    assert cmd.startswith("cd firmware/build && esptool.py --chip esp32c6 merge_bin")
+    assert cmd.endswith(f"-o {Path(MERGED).name} @flash_args")
+    assert Path(MERGED).parent.as_posix() == "firmware/build"
 
 
 def test_readme_uses_the_same_image_pin() -> None:
