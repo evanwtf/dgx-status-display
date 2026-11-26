@@ -10,11 +10,13 @@
 #include <string.h>
 
 #include "burnin.h"
+#include "button.h"
 #include "carousel.h"
 #include "fmt.h"
 #include "history.h"
 #include "line_reader.h"
 #include "palette.h"
+#include "pmu_key.h"
 #include "link_state.h"
 #include "report.h"
 #include "settings.h"
@@ -885,6 +887,121 @@ static void test_settings(void)
     CHECK_STR(chart_style_name(CHART_HISTORY), "2-minute history");
 }
 
+/* Feed one reading per 10 ms from t, return the last event; *t advances. */
+static button_event_t feed(button_t *b, bool raw, uint32_t *t, int n, uint32_t *held)
+{
+    button_event_t last = BUTTON_NONE;
+    for (int i = 0; i < n; i++) {
+        button_event_t e = button_update(b, raw, *t, held);
+        if (e != BUTTON_NONE) {
+            last = e;
+        }
+        *t += 10;
+    }
+    return last;
+}
+
+static void test_button_debounce(void)
+{
+    button_t b;
+    uint32_t t = 1000, held = 0;
+    button_init(&b, false, t);
+    CHECK(feed(&b, false, &t, 5, &held) == BUTTON_NONE);
+    /* Down at t=1050: stable after BUTTON_DEBOUNCE_MS. */
+    uint32_t down_at = t;
+    CHECK(button_update(&b, true, t, &held) == BUTTON_NONE);
+    CHECK(button_update(&b, true, down_at + BUTTON_DEBOUNCE_MS - 1, &held) == BUTTON_NONE);
+    CHECK(button_update(&b, true, down_at + BUTTON_DEBOUNCE_MS, &held) == BUTTON_DOWN);
+    CHECK(b.pressed);
+    /* No second DOWN while held. */
+    t = down_at + 100;
+    CHECK(feed(&b, true, &t, 50, &held) == BUTTON_NONE);
+    /* Up: held is measured edge to edge, not including the debounce. */
+    uint32_t up_at = down_at + 800;
+    CHECK(button_update(&b, false, up_at, &held) == BUTTON_NONE);
+    CHECK(button_update(&b, false, up_at + BUTTON_DEBOUNCE_MS, &held) == BUTTON_UP);
+    CHECK(held == 800);
+    CHECK(!b.pressed);
+    CHECK(button_update(&b, false, up_at + 500, &held) == BUTTON_NONE);
+}
+
+static void test_button_bounce_ignored(void)
+{
+    button_t b;
+    uint32_t t = 0, held = 0;
+    button_init(&b, false, t);
+    /* Chatter shorter than the debounce: no event. */
+    for (int i = 0; i < 20; i++) {
+        CHECK(button_update(&b, (i % 2) == 0, t, &held) == BUTTON_NONE);
+        t += 5;
+    }
+    CHECK(!b.pressed);
+    /* A 20 ms blip is too short. */
+    CHECK(feed(&b, false, &t, 5, &held) == BUTTON_NONE);
+    CHECK(feed(&b, true, &t, 2, &held) == BUTTON_NONE);
+    CHECK(feed(&b, false, &t, 5, &held) == BUTTON_NONE);
+    CHECK(!b.pressed);
+    /* Bounce on release does not split one press into two. */
+    CHECK(feed(&b, true, &t, 10, &held) == BUTTON_DOWN);
+    CHECK(feed(&b, false, &t, 1, &held) == BUTTON_NONE);
+    CHECK(feed(&b, true, &t, 1, &held) == BUTTON_NONE);
+    CHECK(feed(&b, false, &t, 10, &held) == BUTTON_UP);
+    CHECK(feed(&b, false, &t, 10, &held) == BUTTON_NONE);
+}
+
+static void test_button_held_at_start(void)
+{
+    button_t b;
+    uint32_t t = 0, held = 0;
+    button_init(&b, true, t);
+    CHECK(feed(&b, true, &t, 100, &held) == BUTTON_NONE);
+    /* The release of the start press is silent and arms the button. */
+    CHECK(feed(&b, false, &t, 10, &held) == BUTTON_NONE);
+    CHECK(b.armed);
+    CHECK(feed(&b, true, &t, 10, &held) == BUTTON_DOWN);
+    CHECK(feed(&b, false, &t, 10, &held) == BUTTON_UP);
+    CHECK(held == 100);
+}
+
+static void test_button_clock_wrap(void)
+{
+    button_t b;
+    uint32_t t = UINT32_MAX - 25, held = 0;
+    button_init(&b, false, t);
+    CHECK(feed(&b, true, &t, 5, &held) == BUTTON_DOWN);
+    CHECK(feed(&b, true, &t, 20, &held) == BUTTON_NONE);
+    CHECK(feed(&b, false, &t, 5, &held) == BUTTON_UP);
+    CHECK(held == 250);
+    /* NULL held is allowed. */
+    CHECK(feed(&b, true, &t, 5, NULL) == BUTTON_DOWN);
+    CHECK(feed(&b, false, &t, 5, NULL) == BUTTON_UP);
+}
+
+static void test_pmu_key(void)
+{
+    /* REG 22: only bit 1 clears. */
+    CHECK(pmu_key_pwroff_value(0x07) == 0x05);
+    CHECK(pmu_key_pwroff_value(0x06) == 0x04);
+    CHECK(pmu_key_pwroff_value(0x05) == 0x05);
+    CHECK(pmu_key_pwroff_value(0x00) == 0x00);
+    /* REG 27: OFFLEVEL to 10 s; IRQLEVEL and ONLEVEL stay. Reset value is
+     * IRQLEVEL 01, OFFLEVEL 01, ONLEVEL from EFUSE. */
+    CHECK(pmu_key_level_value(0x14) == 0x1C);
+    CHECK(pmu_key_level_value(0x17) == 0x1F);
+    CHECK(pmu_key_level_value(0x10) == 0x1C); /* the XiaoZhi value: 4 s */
+    CHECK(pmu_key_level_value(0x3F) == 0x3F);
+    CHECK(pmu_key_offlevel_ms(0x14) == 6000);
+    CHECK(pmu_key_offlevel_ms(0x10) == 4000);
+    CHECK(pmu_key_offlevel_ms(pmu_key_level_value(0x14)) == 10000);
+    CHECK(pmu_key_irqlevel_ms(0x14) == 1500);
+    CHECK(pmu_key_irqlevel_ms(0x00) == 1000);
+    CHECK(pmu_key_irqlevel_ms(0x30) == 2500);
+    /* REG 41: the four key bits on; the reset default 0xFC keeps the rest. */
+    CHECK(pmu_key_irq_enable_value(0xFC) == 0xFF);
+    CHECK(pmu_key_irq_enable_value(0x00) == 0x0F);
+    CHECK(pmu_key_irq_enable_value(0xF0) == 0xFF);
+}
+
 int main(void)
 {
     test_parse_real_frame();
@@ -912,6 +1029,11 @@ int main(void)
     test_history_ring();
     test_history_heights();
     test_settings();
+    test_button_debounce();
+    test_button_bounce_ignored();
+    test_button_held_at_start();
+    test_button_clock_wrap();
+    test_pmu_key();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

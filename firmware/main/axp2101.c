@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "logic/pmu_key.h"
 
 static const char *TAG = "axp2101";
 
@@ -53,6 +54,52 @@ static esp_err_t set_voltage(uint8_t reg, uint8_t code)
     return wr(reg, (uint8_t)((val & (uint8_t)~VOLTAGE_MASK) | code));
 }
 
+/* Write a register only when the new value differs. Logs the change. */
+static esp_err_t update(uint8_t reg, uint8_t (*next)(uint8_t), uint8_t *now)
+{
+    uint8_t val = 0;
+    ESP_RETURN_ON_ERROR(rd(reg, &val), TAG, "read 0x%02x", reg);
+    const uint8_t want = next(val);
+    if (want != val) {
+        ESP_RETURN_ON_ERROR(wr(reg, want), TAG, "write 0x%02x", reg);
+        ESP_LOGI(TAG, "reg 0x%02x: 0x%02x -> 0x%02x", reg, val, want);
+    }
+    *now = want;
+    return ESP_OK;
+}
+
+/* Evan must not switch the board off by holding PWR by accident. */
+static esp_err_t key_setup(void)
+{
+    uint8_t r22 = 0, r27 = 0, r41 = 0;
+    ESP_RETURN_ON_ERROR(update(PMU_REG_PWROFF_EN, pmu_key_pwroff_value, &r22), TAG, "pwroff");
+    ESP_RETURN_ON_ERROR(update(PMU_REG_KEY_LEVEL, pmu_key_level_value, &r27), TAG, "key level");
+    ESP_RETURN_ON_ERROR(update(PMU_REG_IRQ_EN2, pmu_key_irq_enable_value, &r41), TAG, "key irq");
+    /* Drop key IRQs from before this boot. */
+    ESP_RETURN_ON_ERROR(wr(PMU_REG_IRQ_STS2, PMU_KEY_ALL), TAG, "clear key irq");
+    ESP_LOGI(TAG, "power key: hold power-off %s, off after %lu ms, long press %lu ms",
+             (r22 & PMU_PWROFF_KEY_BIT) ? "ON" : "off",
+             (unsigned long)pmu_key_offlevel_ms(r27), (unsigned long)pmu_key_irqlevel_ms(r27));
+    return ESP_OK;
+}
+
+esp_err_t axp2101_key_poll(uint8_t *bits)
+{
+    *bits = 0;
+    if (!s_verified) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    uint8_t sts = 0;
+    ESP_RETURN_ON_ERROR(rd(PMU_REG_IRQ_STS2, &sts), TAG, "read key irq");
+    sts &= PMU_KEY_ALL;
+    if (sts != 0) {
+        /* Write 1 to clear only the key bits; VBUS and battery bits stay. */
+        ESP_RETURN_ON_ERROR(wr(PMU_REG_IRQ_STS2, sts), TAG, "clear key irq");
+    }
+    *bits = sts;
+    return ESP_OK;
+}
+
 esp_err_t axp2101_init(i2c_master_bus_handle_t bus)
 {
     const i2c_device_config_t cfg = {
@@ -84,6 +131,11 @@ esp_err_t axp2101_init(i2c_master_bus_handle_t bus)
     }
     s_verified = true;
     ESP_LOGI(TAG, "PMU ready (chip id 0x%02x)", id);
+    const esp_err_t key = key_setup();
+    if (key != ESP_OK) {
+        /* The panel still works; only the power-key settings are unknown. */
+        ESP_LOGE(TAG, "power key setup failed: %s", esp_err_to_name(key));
+    }
     return ESP_OK;
 }
 

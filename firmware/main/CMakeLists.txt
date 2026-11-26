@@ -7,6 +7,7 @@ idf_component_register(
         "ui.c"
         "view.c"
         "settings_nvs.c"
+        "buttons.c"
         "fonts/jbm_num_110.c"
         "fonts/jbm_num_82.c"
         "fonts/jbm_mix_66.c"
@@ -26,6 +27,8 @@ idf_component_register(
         "logic/palette.c"
         "logic/history.c"
         "logic/settings.c"
+        "logic/button.c"
+        "logic/pmu_key.c"
     INCLUDE_DIRS "." "logic"
     REQUIRES
         esp_driver_i2c

@@ -108,8 +108,8 @@ The board restarts and shows "DGX not sending".
 **If esptool cannot connect** (for example, the firmware on the chip has
 taken over USB): unplug the board, hold **BOOT**, plug it back in, release
 BOOT. The chip now waits in its bootloader. Run the same command with
-`--before no_reset` in place of `--before default_reset`. Then press the
-reset button or replug.
+`--before no_reset` in place of `--before default_reset`. Then replug the
+board: it has no reset button.
 
 ### 5. Install the service
 

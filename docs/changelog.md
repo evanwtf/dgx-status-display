@@ -6,6 +6,11 @@ First version: phase 1, USB serial.
 
 After the first board test:
 
+- Buttons: the firmware logs each press of BOOT (GPIO9), KEY (GPIO10) and
+  PWR (GPIO18 and the PMU's key IRQs), so the daemon relays them. Holding
+  PWR no longer switches the board off: the firmware clears the PMU's key
+  power-off bit and sets its hold time to the 10 s maximum. To switch the
+  board off, unplug it.
 - Design pass: colored tiles whose level fill (or, as an option, a 2-minute
   history chart) shows the reading; temperature tiles change hue at the
   thresholds; Barlow Semi Condensed for words; a WCAG contrast test for

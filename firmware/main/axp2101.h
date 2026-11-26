@@ -17,3 +17,12 @@ esp_err_t axp2101_init(i2c_master_bus_handle_t bus);
 /* ALDO3 powers the panel. Off, then on: the panel's power-on reset.
  * ESP_ERR_INVALID_STATE without a verified PMU. */
 esp_err_t axp2101_panel_power_cycle(void);
+
+/* Power key. axp2101_init() turns key power-off off (REG 22 bit 1), sets the
+ * power-off hold to 10 s (REG 27, the maximum, in case bit 1 does not
+ * stick) and turns on the four PWRON IRQs (REG 41). */
+
+/* Read and clear the PWRON IRQ bits (REG 49, PMU_KEY_* in logic/pmu_key.h).
+ * Call from the LVGL task: touch uses the same bus there. *bits is 0 when
+ * nothing happened. ESP_ERR_INVALID_STATE without a verified PMU. */
+esp_err_t axp2101_key_poll(uint8_t *bits);

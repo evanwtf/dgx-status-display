@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "buttons.h"
 #include "display.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
@@ -205,4 +206,5 @@ void ui_init(void)
                             NULL);
     tick(NULL);
     lv_timer_create(tick, UI_PERIOD_MS, NULL);
+    buttons_start();
 }
