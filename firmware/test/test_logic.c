@@ -628,18 +628,6 @@ static void test_report_hello(void)
     CHECK_STR(b, "");
 }
 
-static void test_report_diag(void)
-{
-    char b[300];
-    report_diag_t d = {.up_s = 75, .stk_rx = 2100, .stk_ui = 3300, .lv_used_pct = 41,
-                       .lv_free = 28000, .lv_big = 20000, .heap = 180000, .heap_min = 170000};
-    size_t n = report_diag(b, sizeof(b), &d);
-    CHECK_STR(b, "{\"diag\":1,\"up_s\":75,\"stk_rx\":2100,\"stk_ui\":3300,\"lv_used_pct\":41,"
-                 "\"lv_free\":28000,\"lv_big\":20000,\"heap\":180000,\"heap_min\":170000}\n");
-    CHECK(n == strlen(b));
-    CHECK(report_diag(b, 10, &d) == 0);
-}
-
 int main(void)
 {
     test_parse_real_frame();
@@ -662,7 +650,6 @@ int main(void)
     test_page_tiles_busy_and_missing();
     test_carousel();
     test_report_hello();
-    test_report_diag();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

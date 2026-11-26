@@ -73,22 +73,3 @@ size_t report_hello(char *buf, size_t cap, const char *fw, const char *elf, cons
     }
     return n;
 }
-
-size_t report_diag(char *buf, size_t cap, const report_diag_t *d)
-{
-    int k = snprintf(buf, cap,
-                     "{\"diag\":1,\"up_s\":%lld,\"stk_rx\":%lu,\"stk_ui\":%lu,"
-                     "\"lv_used_pct\":%lu,\"lv_free\":%lu,\"lv_big\":%lu,"
-                     "\"heap\":%lu,\"heap_min\":%lu}\n",
-                     (long long)d->up_s, (unsigned long)d->stk_rx, (unsigned long)d->stk_ui,
-                     (unsigned long)d->lv_used_pct, (unsigned long)d->lv_free,
-                     (unsigned long)d->lv_big, (unsigned long)d->heap,
-                     (unsigned long)d->heap_min);
-    if (k < 0 || (size_t)k >= cap) {
-        if (cap) {
-            buf[0] = '\0';
-        }
-        return 0;
-    }
-    return (size_t)k;
-}

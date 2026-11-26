@@ -70,8 +70,14 @@ uv run python scripts/firmware.py preview  # render the UI to firmware/preview/*
   regenerate; `--check` must pass.
 - **Look at the preview before you ask for a flash.** No agent can see the
   board.
-- **The console stays on UART0.** USB-Serial-JTAG carries frames only. Never
-  log to it.
+- **Board logs go to USB on purpose.** USB-Serial-JTAG is the secondary
+  console, so ESP-IDF logs and the boot banner reach the host, and the daemon
+  relays them (`board_log.py`). Never parse a log line as data; only JSON
+  objects are messages.
+- **Task watchdog: subscribe from the task that feeds it.**
+  `esp_task_wdt_add(NULL)` subscribes the calling task. Code that runs in
+  `app_main` runs in the main task, which ends; a subscription made there
+  panics the board 10 s later.
 
 ## Delivery
 

@@ -157,8 +157,10 @@ sudo systemctl start dgx-status
 
 ## Read a crash
 
-The board keeps a core dump in flash after a panic or a watchdog reset, and
-its next hello says why it reset; the daemon logs that as a WARNING. To read
+The board's own log comes over USB, and the daemon relays its errors and
+warnings, and every reboot, to the journal (`journalctl -u dgx-status`). The
+board also keeps a core dump in flash after a panic or a watchdog reset, and
+its next hello says why it reset. To read
 the dump (esptool resets the chip, so stop the service first):
 
 ```bash

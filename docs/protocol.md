@@ -70,10 +70,10 @@ overview fields always fit.
 {"v":1,"t":1795664697,"tz_s":-18000,"host":"test-host","up_s":1214815,"load1":0.35,"load5":0.48,"load15":0.36,"cpu_pct":0.3,"mem_used_gib":7.2,"mem_total_gib":121.7,"gpu_pct":0,"gpu_w":4,"gpu_c":44,"occ":"idle","fan0_rpm":2790,"fan1_rpm":4185,"board_c":45.8,"nvme_c":44.9,"nic_c":47.0,"th":[["tz0",45.8],["tz1",43.9],["nvme",44.9],["nic0",47.0],["wifi",42.0]]}
 ```
 
-## Display to host: hello and diag
+## Display to host: hello and log lines
 
-The display sends JSON lines too. The daemon ignores any line that is not a
-JSON object (the ROM boot banner also comes out on this port).
+The display sends JSON lines too. Any line that is not a JSON object is a log
+line (below).
 
 ### hello
 
@@ -96,21 +96,25 @@ The daemon logs the hello at INFO. When `rst` is `panic`, `task_wdt`,
 hello can be lost: the board sends it whether or not the host has the port
 open.
 
-### diag
+### Log lines
 
-One line every 60 s (the first about 15 s after boot). The daemon logs it at
-DEBUG.
+USB-Serial-JTAG is also the board's secondary console, on purpose
+(`firmware/sdkconfig.defaults`): the ROM boot banner and every ESP-IDF log
+line come out here, mixed with the JSON lines. The daemon never reads them
+as data. It relays them to its own log:
 
-```json
-{"diag":1,"up_s":75,"stk_rx":2100,"stk_ui":3300,"lv_used_pct":41,"lv_free":28000,"lv_big":20000,"heap":180000,"heap_min":170000}
-```
-
-| Field | Meaning |
+| Line | Daemon log |
 | --- | --- |
-| `up_s` | Seconds since boot. |
-| `stk_rx`, `stk_ui` | The lowest free stack so far, in bytes, of the serial RX task and the LVGL task. |
-| `lv_used_pct`, `lv_free`, `lv_big` | The LVGL heap: percent used, free bytes, largest free block. |
-| `heap`, `heap_min` | The ESP-IDF heap: free bytes now, and the lowest since boot. |
+| `E (…) tag: msg`, `W (…) tag: msg` | WARNING, at most once per distinct message per 60 s; the next one says how many were held back |
+| `rst:0x… (…)` (the ROM's reset line) | WARNING, every time, so each reboot is in the journal |
+| `I`, `D`, `V` lines, the rest of the banner, anything else | DEBUG |
+
+Once a minute the firmware logs its stack and heap high-water marks
+(`ui: free: stack rx … B, lvgl … B; lv heap …% used, …`) at INFO, or at WARN
+when a stack has under 768 bytes left or the LVGL heap is 85 % used.
+
+Log output and the hello share the port without a lock, so a log line can
+split a hello in rare cases; that hello is then relayed as a log line.
 
 ## Validation on the display
 

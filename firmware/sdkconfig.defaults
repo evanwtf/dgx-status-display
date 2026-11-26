@@ -6,10 +6,13 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_FREERTOS_HZ=1000
 
-# Console and logs on UART0 only. USB-Serial-JTAG carries the frame stream,
-# and a log line there would corrupt it.
+# Logs go to UART0 (the console) AND, on purpose, to USB-Serial-JTAG as the
+# secondary console. UART0 is not wired to anything; over USB the host daemon
+# relays the board's log lines to its own log (docs/protocol.md). Frames only
+# flow host -> board, so board -> host log lines cannot corrupt them; the
+# daemon skips any line that is not a JSON object.
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
-CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 
 # Wi-Fi and Bluetooth are unused in phase 1.
 CONFIG_BT_ENABLED=n

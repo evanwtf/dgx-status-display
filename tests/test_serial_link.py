@@ -350,14 +350,20 @@ def test_hello_after_power_on_is_info_only(caplog: pytest.LogCaptureFixture) -> 
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-def test_diag_is_logged_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+def test_board_log_lines_are_relayed_not_returned(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     opener, clock = Opener(), Clock()
     link = _link(opener, clock)
     link.send(b"x\n")
-    opener.ports[0].incoming = b'{"diag":1,"stk_ui":3300,"lv_used_pct":41}\n'
-    with caplog.at_level(logging.DEBUG, logger="dgx_status.serial_link"):
+    opener.ports[0].incoming = (
+        b"rst:0xc (SW_CPU),boot:0x1f (SPI_FAST_FLASH_BOOT)\n"
+        b"E (11760) task_wdt: Task watchdog got triggered.\n"
+        b'{"hello":"d","fw":"1","rst":"task_wdt"}\n'
+    )
+    with caplog.at_level(logging.DEBUG):
         msgs = link.poll()
-    assert msgs == [{"diag": 1, "stk_ui": 3300, "lv_used_pct": 41}]
-    debug = [r for r in caplog.records if r.levelno == logging.DEBUG]
-    assert any("stk_ui" in r.getMessage() for r in debug)
-    assert not [r for r in caplog.records if r.levelno >= logging.INFO]
+    assert msgs == [{"hello": "d", "fw": "1", "rst": "task_wdt"}]
+    text = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("board reset: rst:0xc (SW_CPU)" in m for m in text)
+    assert any("board: E task_wdt: Task watchdog got triggered." in m for m in text)

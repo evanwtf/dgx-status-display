@@ -16,6 +16,8 @@ from typing import Any, Protocol
 
 import serial
 
+from dgx_status.board_log import BoardLogRelay
+
 logger = logging.getLogger(__name__)
 
 MIN_BACKOFF_S = 1.0
@@ -101,6 +103,7 @@ class SerialLink:
         self._path = path
         self._opener = opener
         self._clock = clock
+        self._board_log = BoardLogRelay(clock)
         self._port: Port | None = None
         self._backoff = 0.0
         self._next_try = 0.0
@@ -198,14 +201,13 @@ class SerialLink:
         try:
             msg = json.loads(raw)
         except (ValueError, UnicodeDecodeError):
-            logger.debug("ignored a non-JSON line from the board (%d bytes)", len(raw))
-            return None
+            msg = None
         if not isinstance(msg, dict):
+            # A log line or the boot banner: never data, relayed to our log.
+            self._board_log.relay(raw)
             return None
         if "hello" in msg:
             log_hello(msg)
-        elif "diag" in msg:
-            logger.debug("display diag: %s", msg)
         return msg
 
     def close(self) -> None:

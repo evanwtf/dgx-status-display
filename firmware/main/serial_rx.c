@@ -7,7 +7,6 @@
 #include "esp_app_desc.h"
 #include "esp_check.h"
 #include "esp_core_dump.h"
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -28,9 +27,6 @@ static const char *TAG = "serial_rx";
 #define RX_TASK_PRIORITY 3
 /* At most one log line per this interval for rejected input. */
 #define REJECT_LOG_MS 10000
-/* One diag line this often; the first one this soon after boot. */
-#define DIAG_PERIOD_MS 60000
-#define DIAG_FIRST_MS 15000
 
 static SemaphoreHandle_t s_lock;
 static rx_snapshot_t s_state;
@@ -44,8 +40,6 @@ static uint32_t s_rejects_since_log;
 static const char *s_rst = "unknown";
 static char s_why[REPORT_WHY_MAX + 1];
 static char s_elf[17];
-/* Diag values the UI task reports (serial_rx_set_ui_diag). */
-static report_diag_t s_ui_diag;
 
 static int64_t now_ms(void)
 {
@@ -112,20 +106,6 @@ static void send_hello(void)
     send_line(line, n);
 }
 
-static void send_diag(int64_t now)
-{
-    report_diag_t d;
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    d = s_ui_diag;
-    xSemaphoreGive(s_lock);
-    d.up_s = now / 1000;
-    d.stk_rx = serial_rx_stack_free();
-    d.heap = (uint32_t)esp_get_free_heap_size();
-    d.heap_min = (uint32_t)esp_get_minimum_free_heap_size();
-    char line[256];
-    send_line(line, report_diag(line, sizeof(line), &d));
-}
-
 /* Count a rejected line. Log the first one, then at most one summary line
  * per REJECT_LOG_MS, so a noisy host cannot flood the UART. */
 static void note_reject(const char *why)
@@ -168,14 +148,7 @@ static void rx_task(void *arg)
     (void)arg;
     static uint8_t chunk[READ_CHUNK];
     send_hello();
-    int64_t next_diag_ms = now_ms() + DIAG_FIRST_MS;
     for (;;) {
-        /* This task is the only writer to USB-Serial-JTAG, so lines from
-         * different tasks never interleave. */
-        if (now_ms() >= next_diag_ms) {
-            send_diag(now_ms());
-            next_diag_ms = now_ms() + DIAG_PERIOD_MS;
-        }
         int n = usb_serial_jtag_read_bytes(chunk, sizeof(chunk), pdMS_TO_TICKS(100));
         for (int i = 0; i < n; i++) {
             switch (line_reader_feed(&s_reader, chunk[i])) {
@@ -222,15 +195,4 @@ void serial_rx_get(rx_snapshot_t *out)
 uint32_t serial_rx_stack_free(void)
 {
     return s_task ? (uint32_t)uxTaskGetStackHighWaterMark(s_task) : 0;
-}
-
-void serial_rx_set_ui_diag(uint32_t stk_ui, uint32_t lv_used_pct, uint32_t lv_free,
-                           uint32_t lv_big)
-{
-    xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_ui_diag.stk_ui = stk_ui;
-    s_ui_diag.lv_used_pct = lv_used_pct;
-    s_ui_diag.lv_free = lv_free;
-    s_ui_diag.lv_big = lv_big;
-    xSemaphoreGive(s_lock);
 }

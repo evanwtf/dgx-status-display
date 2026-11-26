@@ -10,6 +10,7 @@
 #include "display.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "logic/burnin.h"
@@ -91,22 +92,31 @@ static void feed_watchdog(void)
     esp_task_wdt_reset();
 }
 
-/* Stack and LVGL heap: logged on UART0 once a minute, and handed to
- * serial_rx for the diag line the host logs. */
+/* Stack and heap high-water marks, logged once a minute. Logs reach the
+ * host over USB (the daemon relays I lines at DEBUG), so a near miss is a
+ * warning there. */
+#define STACK_LOW_BYTES 768
+#define LV_HEAP_HIGH_PCT 85
+
 static void log_stack(int64_t now)
 {
     s_lvgl_stack_free = (uint32_t)uxTaskGetStackHighWaterMark(NULL);
+    if (now - s_last_stack_log_ms < STACK_LOG_MS) {
+        return;
+    }
+    s_last_stack_log_ms = now;
     lv_mem_monitor_t mon;
     lv_mem_monitor(&mon);
-    serial_rx_set_ui_diag(s_lvgl_stack_free, mon.used_pct, (uint32_t)mon.free_size,
-                          (uint32_t)mon.free_biggest_size);
-    if (now - s_last_stack_log_ms >= STACK_LOG_MS) {
-        ESP_LOGI(TAG, "stack free (high-water): rx %lu B, lvgl %lu B; lv heap %u%% used, "
-                      "largest free %lu B",
-                 (unsigned long)serial_rx_stack_free(), (unsigned long)s_lvgl_stack_free,
-                 (unsigned)mon.used_pct, (unsigned long)mon.free_biggest_size);
-        s_last_stack_log_ms = now;
-    }
+    uint32_t rx = serial_rx_stack_free();
+    bool near_miss = rx < STACK_LOW_BYTES || s_lvgl_stack_free < STACK_LOW_BYTES ||
+                     mon.used_pct >= LV_HEAP_HIGH_PCT;
+    esp_log_level_t level = near_miss ? ESP_LOG_WARN : ESP_LOG_INFO;
+    ESP_LOG_LEVEL(level, TAG,
+                  "free: stack rx %lu B, lvgl %lu B; lv heap %u%% used, largest %lu B; "
+                  "heap %lu B, min %lu B",
+                  (unsigned long)rx, (unsigned long)s_lvgl_stack_free, (unsigned)mon.used_pct,
+                  (unsigned long)mon.free_biggest_size, (unsigned long)esp_get_free_heap_size(),
+                  (unsigned long)esp_get_minimum_free_heap_size());
 }
 
 /* t is NULL only for the first call, from ui_init() in the main task. */
