@@ -7,8 +7,20 @@ SHELL := bash
 .DEFAULT_GOAL := help
 MAKEFLAGS += --no-builtin-rules --no-print-directory
 
-# The checkout that holds this Makefile, with no trailing slash.
+# The checkout that holds this Makefile, with no trailing slash. Make splits
+# words on spaces, so a path with a space cannot work: refuse it here.
+empty :=
+space := $(empty) $(empty)
+ifneq ($(words $(MAKEFILE_LIST)),1)
+$(error The path to this Makefile holds a space: $(MAKEFILE_LIST). Move the checkout to a path with no space)
+endif
 REPO := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+ifneq ($(findstring $(space),$(REPO)),)
+$(error The checkout path holds a space: $(REPO). Move the checkout to a path with no space)
+endif
+ifeq ($(wildcard $(REPO)/scripts/firmware.py),)
+$(error No $(REPO)/scripts/firmware.py: this Makefile must sit in a dgx-status-display checkout)
+endif
 UV := cd "$(REPO)" && uv run --frozen
 FW := $(UV) python scripts/firmware.py
 
@@ -18,15 +30,23 @@ PORT ?=
 ELF ?=
 # For `make release-check`, for example 0.0.2.
 VERSION ?=
+# NO_BACKUP=1: flash with no checked factory backup (not recommended).
+NO_BACKUP ?=
+# FORCE=1: install-service replaces a unit that serves another checkout.
+FORCE ?=
 SERVICE := dgx-status
 UNIT := /etc/systemd/system/$(SERVICE).service
-SERVICE_USER ?= $(USER)
+SERVICE_USER ?= $(or $(USER),$(shell id -un))
 
 # The one port that PORT names. Make expands this when it expands the recipe,
 # before any line runs (also under `make -n`), so a board target stops here.
 board_port = $(strip \
   $(if $(PORT),,$(error PORT is not set. Set it to the board's port: export PORT=$$(ls /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00))) \
   $(if $(filter 1,$(words $(wildcard $(PORT)))),$(wildcard $(PORT)),$(error PORT=$(PORT) matches $(words $(wildcard $(PORT))) devices; it must match exactly one)))
+
+# The account in the unit. Empty or root means make runs under sudo: refuse.
+service_user = $(strip \
+  $(if $(filter-out root,$(SERVICE_USER)),$(SERVICE_USER),$(error SERVICE_USER is "$(SERVICE_USER)". Run make as the account that runs the daemon and not under sudo; make asks for sudo itself)))
 
 .PHONY: help setup check test \
   fw-test fw-build fw-size fw-preview fw-merge fonts-check \
@@ -46,17 +66,7 @@ setup: ## Install the locked dependencies and the pre-commit hooks
 	cd "$(REPO)" && uv run --frozen pre-commit install
 
 check: ## Run CI's Python checks (ruff, mypy, pytest, no skips); report every failure
-	@cd "$(REPO)"; status=0; \
-	run() { echo "+ uv run --frozen $$*"; uv run --frozen "$$@" || status=1; }; \
-	run ruff format --check .; \
-	run ruff check .; \
-	run mypy; \
-	run pytest -q -rs; \
-	echo "+ pytest without the hardware suites must skip nothing"; \
-	out=$$(uv run --frozen pytest -q -rs -m 'not integration and not slow' 2>&1) || status=1; \
-	echo "$$out"; \
-	if grep -q SKIPPED <<<"$$out"; then echo "unexpected skip"; status=1; fi; \
-	exit "$$status"
+	$(UV) python scripts/run_checks.py
 
 test: ## Run pytest only
 	$(UV) pytest -q -rs
@@ -86,12 +96,12 @@ fonts-check: ## Check that the fonts regenerate byte for byte
 backup: ## Read the whole 16 MB flash to backup/factory-16MB.bin and .sha256
 	$(FW) backup --port "$(board_port)"
 
-flash: ## Flash the build with flash_args; keeps the board's settings
-	$(FW) flash --port "$(board_port)"
+flash: ## Flash the build with flash_args; keeps the settings (needs the backup)
+	$(FW) flash --port "$(board_port)"$(if $(NO_BACKUP), --no-backup)
 
-flash-merged: ## First install: merge, then flash at 0x0; ERASES the board's settings
+flash-merged: ## First install: merge, then flash at 0x0; ERASES the settings (needs the backup)
 	$(FW) merge
-	$(FW) flash-merged --port "$(board_port)"
+	$(FW) flash-merged --port "$(board_port)"$(if $(NO_BACKUP), --no-backup)
 
 coredump: ## Read and decode the board's core dump (ELF=... for an older build)
 	$(FW) coredump --port "$(board_port)"$(if $(ELF), --elf "$(ELF)")
@@ -102,18 +112,24 @@ monitor: ## Show the board's log with idf.py monitor (Ctrl-] quits)
 ##@ Daemon
 
 run: ## Run the daemon in the foreground at INFO (PORT=... pins a port)
-	cd "$(REPO)" && DGX_STATUS_LOG_LEVEL=INFO uv run --frozen dgx-status$(if $(PORT), --device "$(PORT)")
+	cd "$(REPO)" && DGX_STATUS_LOG_LEVEL=INFO uv run --frozen dgx-status$(if $(PORT), --device "$(board_port)")
 
 dry-run: ## Log one frame; open no device
 	$(UV) dgx-status --dry-run --once
 
 ##@ Service (uses sudo; prints each command first)
 
-install-service: ## Install and start the systemd unit for this user and checkout
+install-service: ## Install the unit for this user and checkout; enable and (re)start it
 	@test -x "$(REPO)/.venv/bin/dgx-status" || { echo "no .venv: run make setup first" >&2; exit 1; }
-	sed -e 's|@USER@|$(SERVICE_USER)|g' -e 's|@REPO@|$(REPO)|g' "$(REPO)/deploy/dgx-status.service" | sudo tee "$(UNIT)" >/dev/null
+	@unit="$$(mktemp)"; trap 'rm -f "$$unit"' EXIT; \
+	cd "$(REPO)"; \
+	uv run --frozen python scripts/service.py render --user "$(service_user)" --repo "$(REPO)" \
+	  --installed "$(UNIT)" --out "$$unit"$(if $(FORCE), --force); \
+	echo "+ sudo install -m 0644 $$unit $(UNIT)"; \
+	sudo install -m 0644 "$$unit" "$(UNIT)"
 	sudo systemctl daemon-reload
-	sudo systemctl enable --now $(SERVICE)
+	sudo systemctl enable $(SERVICE)
+	sudo systemctl restart $(SERVICE)
 	@echo "Follow the log: journalctl -u $(SERVICE) -f"
 
 uninstall-service: ## Stop, disable and remove the systemd unit

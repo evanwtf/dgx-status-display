@@ -2,12 +2,14 @@
 #
 # A template: install renders @USER@ (the account that runs the daemon) and
 # @REPO@ (the absolute path of the checkout). See README, "Install the
-# service":
+# service". `make install-service` renders it with scripts/service.py, which
+# refuses root and unsafe paths. The raw commands:
 #
 #   sed -e "s|@USER@|$USER|g" -e "s|@REPO@|$REPO|g" deploy/dgx-status.service \
 #     | sudo tee /etc/systemd/system/dgx-status.service >/dev/null
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now dgx-status
+#   sudo systemctl enable dgx-status
+#   sudo systemctl restart dgx-status
 #
 # Run `uv sync --frozen` in the checkout first. The daemon finds the board's
 # /dev/serial/by-id/ port itself. To pin one port, set DGX_STATUS_DEVICE in

@@ -5,12 +5,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import service
+
 UNIT = Path(__file__).resolve().parent.parent / "deploy" / "dgx-status.service"
 
 
 def render(user: str, repo: str) -> str:
-    """The same substitution the README install step does with sed."""
-    return UNIT.read_text().replace("@USER@", user).replace("@REPO@", repo)
+    """The substitution `make install-service` does (scripts/service.py)."""
+    return service.render(UNIT.read_text(), user, repo)
 
 
 def test_template_has_placeholders_not_values() -> None:

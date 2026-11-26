@@ -39,12 +39,12 @@ jobs:
       - run: echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - run: uv sync --frozen
-      # The Makefile holds the steps, so CI and `make check` cannot drift:
-      # ruff format --check, ruff check, mypy, pytest -q -rs (the NVML
+      # scripts/run_checks.py holds the steps, so CI and `make check` cannot
+      # drift: ruff format --check, ruff check, mypy, pytest -q -rs (the NVML
       # integration test skips cleanly; no GPU here), then pytest without the
       # hardware suites, which fails on any skip. It runs every step and
-      # fails at the end if any failed. tests/test_makefile.py dry-runs
-      # every other target.
+      # fails at the end if any failed (tests/test_run_checks.py).
+      # tests/test_makefile.py dry-runs every other target.
       - run: make --version | head -n 1
       - run: make check
 
