@@ -17,6 +17,79 @@ Phase 1 is USB serial only. See [docs/plan.md](docs/plan.md) for phase 2
 (Wi-Fi, outlet power, both Sparks) and [docs/protocol.md](docs/protocol.md)
 for the frame format.
 
+## Requirements
+
+- **Linux with Docker.** Docker must work for your user (`docker ps`). The
+  firmware builds and flashes in the pinned ESP-IDF image. The first build
+  pulls it once: about 5.4 GB to download, 9.2 GB on disk.
+- **[uv](https://docs.astral.sh/uv/).** It fetches Python 3.13 itself.
+- **git** and **GNU make**.
+- **A DGX Spark, for real data.** The daemon reads NVML, `/proc` and the
+  hwmon sensors of the Spark it runs on. The fan readings need the
+  `nvfanread` hwmon module from
+  [evanwtf/dgx-spark-fan-override](https://github.com/evanwtf/dgx-spark-fan-override).
+  Without it, the fan tiles show `—`.
+- **The board:** a
+  [Waveshare ESP32-C6-Touch-AMOLED-2.16](https://docs.waveshare.com/ESP32-C6-Touch-AMOLED-2.16)
+  and a USB-C cable (see [Hardware](#hardware)).
+
+### The firmware builds in a container
+
+Every firmware step (build, tests, preview, merge, flash, backup, core dump)
+runs in the `espressif/idf:v5.5.6` image, pinned by digest. This is the
+supported path. `scripts/firmware.py` is the one place that holds the
+digest; the make targets and CI call that script. The image is multi-arch
+(`linux/amd64` and `linux/arm64`), so the same pin builds on the Spark
+(arm64) and on an x86-64 machine.
+
+A local ESP-IDF install also works, but only if it is exactly v5.5.6 with
+the components that `firmware/dependencies.lock` locks. Other versions are
+not tested.
+
+## Quick start with make
+
+From a bare DGX Spark to a running display. `make` with no target lists
+every target. The board targets read `PORT`, the board's stable serial
+path. They run esptool in the container with `--device`, so they need no
+sudo and no `dialout` group.
+
+```bash
+export REPO=~/git/dgx-status-display
+git clone https://github.com/evanwtf/dgx-status-display "$REPO"
+cd "$REPO"
+# The board's port. Its name holds the chip's MAC, so find it:
+export PORT=$(ls /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00)
+echo "$PORT"           # must print exactly one path
+make setup             # uv sync --frozen, pre-commit install
+make check             # ruff, mypy, pytest
+make fw-build          # idf.py build in the container
+make backup            # once: save the factory firmware to backup/
+make flash-merged      # first install: erases the board's settings
+make dry-run           # log one frame; opens no device
+make install-service   # sudo: install, enable and start dgx-status
+```
+
+The board restarts and shows "DGX not sending" after the flash. After the
+service starts, the screen shows LIVE. Read each step in
+[Bootstrap, step by step](#bootstrap-step-by-step) before you run it the
+first time.
+
+### Update
+
+The service holds the port, so stop it before you flash:
+
+```bash
+cd "$REPO"
+git pull --ff-only
+make setup
+make fw-build
+sudo systemctl stop dgx-status
+make flash             # keeps the board's settings
+sudo systemctl start dgx-status
+```
+
+The board targets refuse while the service runs.
+
 ## Hardware
 
 - **Board:** [Waveshare ESP32-C6-Touch-AMOLED-2.16](https://docs.waveshare.com/ESP32-C6-Touch-AMOLED-2.16).
@@ -31,22 +104,18 @@ The screen shows GPU use, power and temperature, what is on the GPU, memory,
 CPU, load, fan speeds, board, NVMe and NIC temperatures, uptime and the
 host's clock. A tap opens a page with every temperature sensor.
 
-## Bootstrap
+## Bootstrap, step by step
 
-From a bare DGX Spark to a running display. Run each block in order. Docker
-must work for your user (`docker ps`). The flash steps run esptool inside the
-pinned ESP-IDF image with `--device`, so they need no sudo and no `dialout`
-group.
+The quick start, one step at a time, with the checks for each step. The raw
+commands behind each target are in
+[What the targets run](#what-the-targets-run).
 
 ### 1. Set the variables
 
 ```bash
 export REPO=~/git/dgx-status-display
-# The board's stable serial path. Its name holds the chip's MAC, so find it:
 export PORT=$(ls /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00)
 echo "$PORT"                         # must print exactly one path
-export DEV=$(readlink -f "$PORT")    # for example /dev/ttyACM0
-export IDF_IMAGE=espressif/idf:v5.5.6@sha256:bf72fe7a15c22849a9a94147301165a545fb8905d97c176cf748e3e4614cac84
 ```
 
 ### 2. Get the code and check the daemon
@@ -55,8 +124,8 @@ export IDF_IMAGE=espressif/idf:v5.5.6@sha256:bf72fe7a15c22849a9a94147301165a545f
 if [ -d "$REPO/.git" ]; then git -C "$REPO" pull --ff-only; \
   else git clone https://github.com/evanwtf/dgx-status-display "$REPO"; fi
 cd "$REPO"
-uv sync --frozen
-uv run dgx-status --dry-run --once
+make setup
+make dry-run
 ```
 
 The dry run logs one frame and opens no device. Check it: `occ` matches
@@ -65,24 +134,25 @@ The dry run logs one frame and opens no device. Check it: `occ` matches
 
 ### 3. Back up the factory firmware
 
-Do this once, before the first flash. Each esptool command resets the chip
-into its bootloader and, with `--after hard_reset` (the default), resets it
-back into the factory app when it finishes. The factory screen comes back
-after each step.
+Do this once, before the first flash.
 
 ```bash
 cd "$REPO"
-mkdir -p backup
-alias esptool='docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" esptool.py --chip esp32c6 -p "$DEV"'
-esptool flash_id                      # must report a 16 MB flash
-esptool get_security_info             # secure boot and flash encryption must be off
-docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" \
-  bash -c "esptool.py --chip esp32c6 -p $DEV -b 460800 read_flash 0 0x1000000 backup/factory-16MB.bin \
-    && chown $(id -u):$(id -g) backup/factory-16MB.bin"
-ls -l backup/factory-16MB.bin         # must be 16777216 bytes
-esptool -b 460800 verify_flash 0 backup/factory-16MB.bin   # reads the chip again and compares
-(cd backup && sha256sum factory-16MB.bin > factory-16MB.bin.sha256)
+make backup
 ```
+
+`make backup` runs four esptool commands. Each resets the chip into its
+bootloader, and then back into the factory app, so the factory screen
+comes back after each one:
+
+1. `flash_id`: read its log. It must report a 16 MB flash.
+2. `get_security_info`: secure boot and flash encryption must be off.
+3. `read_flash`: read all 16 MB to `backup/factory-16MB.bin`.
+4. `verify_flash`: read the chip again and compare.
+
+Then it checks the size (16777216 bytes) and writes
+`backup/factory-16MB.bin.sha256`. It refuses to replace a backup that
+exists.
 
 Stop if `get_security_info` shows secure boot or flash encryption enabled:
 this firmware is unsigned and the flash would not boot. Git ignores
@@ -97,28 +167,31 @@ port.
 
 ```bash
 cd "$REPO"
-uv run python scripts/firmware.py test     # host unit tests
-uv run python scripts/firmware.py build    # idf.py build in $IDF_IMAGE
-docker run --rm --device="$DEV" -v "$REPO:/project" -w /project/firmware/build "$IDF_IMAGE" \
-  esptool.py --chip esp32c6 -p "$DEV" -b 460800 --before default_reset --after hard_reset \
-  write_flash "@flash_args"
+make fw-test           # host unit tests
+make fw-build          # idf.py build in the container
+make flash-merged      # merge, then write the one image at 0x0
 ```
 
-The board restarts and shows "DGX not sending".
+The board restarts and shows "DGX not sending". `flash-merged` erases the
+board's stored settings (the screen rotation and the chart style). Use it
+for a first install; later, `make flash` keeps them.
 
 **If esptool cannot connect** (for example, the firmware on the chip has
 taken over USB): unplug the board, hold **BOOT**, plug it back in, release
-BOOT. The chip now waits in its bootloader. Run the same command with
-`--before no_reset` in place of `--before default_reset`. Then replug the
-board: it has no reset button.
+BOOT. The chip now waits in its bootloader. Run the raw flash command (see
+[What the targets run](#what-the-targets-run)) with `--before no_reset` in
+place of `--before default_reset`. Then replug the board: it has no reset
+button.
 
 ### 5. Install the service
 
-`deploy/dgx-status.service` is a template. The install fills in `@USER@`
-(the account that runs the daemon) and `@REPO@` (the checkout). The unit
-adds `dialout` for this service only. The daemon finds the board's port
-itself; to pin one port, put `DGX_STATUS_DEVICE=...` in
-`/etc/default/dgx-status`.
+`deploy/dgx-status.service` is a template. `make install-service` fills in
+`@USER@` (the account that runs the daemon, `$USER` by default; set
+`SERVICE_USER` to change it) and `@REPO@` (this checkout). Then it installs
+the unit with sudo, and runs `daemon-reload` and `enable --now`. It prints
+each sudo command before it runs it. The unit adds `dialout` for this
+service only. The daemon finds the board's port itself; to pin one port,
+put `DGX_STATUS_DEVICE=...` in `/etc/default/dgx-status`.
 
 The network and storage tiles find their sources each second. Set one of
 these in the same file only when the automatic choice is wrong
@@ -134,34 +207,37 @@ these in the same file only when the automatic choice is wrong
 | `DGX_STATUS_LLM_URL` | `http://127.0.0.1:9109/metrics`, the local LLM metrics exporter; `off` reports no engine up, so the board hides the LLM page |
 
 ```bash
-sed -e "s|@USER@|$USER|g" -e "s|@REPO@|$REPO|g" "$REPO/deploy/dgx-status.service" \
-  | sudo tee /etc/systemd/system/dgx-status.service >/dev/null
-sudo systemctl daemon-reload
-sudo systemctl enable --now dgx-status
+cd "$REPO"
+make install-service
 journalctl -u dgx-status -f
 ```
 
 Within a few seconds the log shows `connected to /dev/serial/by-id/...`, and
-`display says hello: dgx-status-display, fw 0.0.1`, and the screen shows LIVE.
+`display says hello: dgx-status-display, fw <version>`, and the screen shows
+LIVE. `make uninstall-service` stops, disables and removes the unit.
 
 ## Install from a release
 
 Each [release](https://github.com/evanwtf/dgx-status-display/releases) holds
 the built firmware, so you need no firmware build. The daemon comes from a
 clone of the same tag, with its locked dependencies. These steps take the
-place of bootstrap steps 2 and 4. Do step 1 (the variables) first.
+place of bootstrap steps 2 and 4. Do step 1 (the variables) first, and set
+`DEV` and `IDF_IMAGE` as in [Without make](#without-make).
 
 Get the daemon at the release tag and check it. This replaces step 2:
 
 ```bash
-export VERSION=0.0.1
+# The latest release:
+export VERSION=$(curl -fsSL https://api.github.com/repos/evanwtf/dgx-status-display/releases/latest \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"].removeprefix("v"))')
 git clone --branch "v$VERSION" https://github.com/evanwtf/dgx-status-display "$REPO"
 cd "$REPO" && uv sync --frozen --no-dev
 uv run --frozen --no-dev dgx-status --version
 uv run --frozen --no-dev dgx-status --dry-run --once
 ```
 
-Do step 3 now (back up the factory firmware). Then download the firmware
+Do step 3 now (back up the factory firmware). `make backup` works here
+too; its `uv run` adds the dev tools to `.venv`. Then download the firmware
 and check it:
 
 ```bash
@@ -207,6 +283,37 @@ The release also has `dgx-status-display-$VERSION-esp32c6.elf` to decode a
 core dump (`scripts/firmware.py coredump --elf`), the wheel and the sdist,
 and `dgx-status.service`. `SHA256SUMS` covers every file.
 
+## Build on another machine
+
+- **The firmware builds on any Linux or macOS machine with Docker.** Clone
+  the repo, then `make setup` and `make fw-build` (or `make fw-merge` for
+  the one image). macOS ships GNU make 3.81; if a target fails with it,
+  install a newer one (`brew install make`) and run `gmake`.
+- **On macOS, Docker cannot pass a USB device into a container**, so the
+  board targets do not work there. Flash with esptool on the host instead.
+  `uvx` runs it without an install; use the same esptool version as the
+  image (4.12.0). The port is `/dev/cu.usbmodem...`.
+
+  First install, the merged image (erases the board's settings):
+
+  ```bash
+  export PORT=$(ls /dev/cu.usbmodem*)    # must be exactly one path
+  make fw-merge
+  uvx --from esptool==4.12.0 esptool.py --chip esp32c6 -p "$PORT" -b 460800 \
+    write_flash 0x0 firmware/build/dgx_status_display-merged.bin
+  ```
+
+  Update, the parts from `flash_args` (keeps the settings):
+
+  ```bash
+  cd firmware/build
+  uvx --from esptool==4.12.0 esptool.py --chip esp32c6 -p "$PORT" -b 460800 \
+    write_flash @flash_args
+  ```
+
+- **The daemon runs only on the Spark that it reports on.** It reads that
+  machine's `/proc`, `/sys` and NVML. Plug the board into that Spark.
+
 ## Serial port access
 
 The port is `root:dialout 0660`. Pick one:
@@ -214,23 +321,25 @@ The port is `root:dialout 0660`. Pick one:
 - **The service (default):** `SupplementaryGroups=dialout` in the unit. Your
   user stays out of `dialout`.
 - **Manual runs as your user:** `sudo usermod -aG dialout "$USER"`, then log
-  out and in. Then `uv run dgx-status` (or `--device "$PORT"` to pin a port).
+  out and in. Then `make run` (or `make run PORT="$PORT"` to pin a port).
 
 ## Update the firmware
 
-Once the service runs, it holds the port. Stop it for every esptool command,
+Once the service runs, it holds the port. Stop it for every board target,
 and start it again afterwards.
 
 ```bash
 cd "$REPO"
 git pull --ff-only
-uv run python scripts/firmware.py build
+make setup
+make fw-build
 sudo systemctl stop dgx-status
-docker run --rm --device="$DEV" -v "$REPO:/project" -w /project/firmware/build "$IDF_IMAGE" \
-  esptool.py --chip esp32c6 -p "$DEV" -b 460800 --before default_reset --after hard_reset \
-  write_flash "@flash_args"
+make flash
 sudo systemctl start dgx-status
 ```
+
+`make monitor` shows the board's own log (`idf.py monitor --no-reset`;
+Ctrl-] quits). It also needs the service stopped.
 
 ## Read a crash
 
@@ -243,16 +352,15 @@ the dump (esptool resets the chip, so stop the service first):
 ```bash
 cd "$REPO"
 sudo systemctl stop dgx-status
-uv run python scripts/firmware.py coredump --port "$PORT" \
-  --elf firmware/elf/dgx_status_display-<elf>.elf
+make coredump ELF=firmware/elf/dgx_status_display-<elf>.elf
 sudo systemctl start dgx-status
 ```
 
 `<elf>` is the `elf` value from the hello line in the daemon log. Without
-`--elf` the step uses the current build's ELF. It prints the panic reason,
+`ELF` the step uses the current build's ELF. It prints the panic reason,
 the crashed task and its backtrace, and saves the raw core in
-`firmware/coredump/`; `--core <file>` decodes a saved core again without the
-board.
+`firmware/coredump/`; `uv run python scripts/firmware.py coredump --core <file>`
+decodes a saved core again without the board.
 
 ## Restore the factory firmware
 
@@ -263,6 +371,8 @@ docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" \
   esptool.py --chip esp32c6 -p "$DEV" -b 460800 write_flash 0 backup/factory-16MB.bin
 sudo systemctl disable --now dgx-status   # the factory app does not read frames
 ```
+
+This command needs `DEV` and `IDF_IMAGE` from [Without make](#without-make).
 
 ## What the screen shows
 
@@ -325,15 +435,13 @@ Each value is one instantaneous reading. An unknown value shows `—`.
 ## Development
 
 ```bash
-uv sync
-uv run pre-commit install
-uv run ruff format --check . && uv run ruff check .
-uv run mypy
-uv run pytest -q -rs
-uv run python scripts/firmware.py test
-uv run python scripts/firmware.py build
-uv run python scripts/firmware.py preview   # render the UI to firmware/preview/*.png
-uv run python scripts/gen_fonts.py --check  # the fonts regenerate byte for byte
+make setup
+make check          # ruff format --check, ruff check, mypy, pytest; reports every failure
+make fw-test
+make fw-build
+make fw-preview     # render the UI to firmware/preview/*.png
+make fonts-check    # the fonts regenerate byte for byte
+make clean          # remove build outputs; keeps backup/ and firmware/elf/
 uv run python scripts/readme_image.py       # refresh docs/img/pages.png from the preview
 ```
 
@@ -344,7 +452,107 @@ fails if a value's last digit changes column between two values.
 `tests/fixtures/spark/` holds /proc and /sys files copied from a DGX Spark.
 `scripts/capture_fixtures.py` copies a fresh set, read-only.
 
-### Cut a release
+## What the targets run
+
+The Makefile is a thin wrapper. Each target runs one of these from the
+checkout, so it works from any directory (`make -C "$REPO" fw-build`).
+`make -n <target>` prints the commands without running them.
+
+| Target | Runs |
+| --- | --- |
+| `setup` | `uv sync --frozen`, `uv run --frozen pre-commit install` |
+| `check` | `uv run --frozen` `ruff format --check .`, `ruff check .`, `mypy`, `pytest -q -rs`, then pytest `-m 'not integration and not slow'`, which must skip nothing |
+| `test` | `uv run --frozen pytest -q -rs` |
+| `fw-test`, `fw-build`, `fw-size`, `fw-preview`, `fw-merge` | `uv run --frozen python scripts/firmware.py test`, `build`, `size`, `preview`, `merge` |
+| `fonts-check` | `uv run --frozen python scripts/gen_fonts.py --check` |
+| `backup`, `flash`, `flash-merged`, `monitor` | `scripts/firmware.py backup`, `flash`, `merge` then `flash-merged`, `monitor`, each with `--port "$PORT"` |
+| `coredump` | `scripts/firmware.py coredump --port "$PORT"`, plus `--elf "$ELF"` when set |
+| `run` | `DGX_STATUS_LOG_LEVEL=INFO uv run --frozen dgx-status`, plus `--device "$PORT"` when set |
+| `dry-run` | `uv run --frozen dgx-status --dry-run --once` |
+| `install-service`, `uninstall-service` | the `sed`, `sudo tee` and `systemctl` commands below |
+| `release-check` | `scripts/release_check.py version "v$VERSION"` and `notes "$VERSION"` |
+| `clean` | `git clean -f -d -X --` on `firmware/build`, `firmware/test/build`, `firmware/test/preview/build`, `firmware/preview` and `dist` (git-ignored files only) |
+
+A board target refuses when `PORT` is unset or does not match exactly one
+path. `scripts/firmware.py` then refuses a path that is not a serial
+device, and refuses while the `dgx-status` service is active.
+
+### Without make
+
+The same steps as raw commands. They run esptool in the pinned image as
+root, with only the board's device passed in. Set the variables first:
+
+```bash
+export REPO=~/git/dgx-status-display
+export PORT=$(ls /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00)
+export DEV=$(readlink -f "$PORT")    # for example /dev/ttyACM0
+export IDF_IMAGE=espressif/idf:v5.5.6@sha256:bf72fe7a15c22849a9a94147301165a545fb8905d97c176cf748e3e4614cac84
+```
+
+`IDF_IMAGE` must equal `IDF_IMAGE` in `scripts/firmware.py`; a test keeps
+them equal.
+
+Checks and firmware:
+
+```bash
+cd "$REPO"
+uv sync --frozen
+uv run --frozen pre-commit install
+uv run --frozen ruff format --check . && uv run --frozen ruff check .
+uv run --frozen mypy
+uv run --frozen pytest -q -rs
+uv run --frozen python scripts/firmware.py test
+uv run --frozen python scripts/firmware.py build
+uv run --frozen python scripts/firmware.py preview
+uv run --frozen python scripts/gen_fonts.py --check
+uv run --frozen dgx-status --dry-run --once
+```
+
+Back up the factory firmware (step 3):
+
+```bash
+cd "$REPO"
+mkdir -p backup
+alias esptool='docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" esptool.py --chip esp32c6 -p "$DEV"'
+esptool flash_id                      # must report a 16 MB flash
+esptool get_security_info             # secure boot and flash encryption must be off
+docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" \
+  bash -c "esptool.py --chip esp32c6 -p $DEV -b 460800 read_flash 0 0x1000000 backup/factory-16MB.bin \
+    && chown $(id -u):$(id -g) backup/factory-16MB.bin"
+ls -l backup/factory-16MB.bin         # must be 16777216 bytes
+esptool -b 460800 verify_flash 0 backup/factory-16MB.bin   # reads the chip again and compares
+(cd backup && sha256sum factory-16MB.bin > factory-16MB.bin.sha256)
+```
+
+Flash the build with `flash_args` (keeps the settings; for a first install,
+run `scripts/firmware.py merge` and write
+`dgx_status_display-merged.bin` at `0x0` instead):
+
+```bash
+cd "$REPO"
+docker run --rm --device="$DEV" -v "$REPO:/project" -w /project/firmware/build "$IDF_IMAGE" \
+  esptool.py --chip esp32c6 -p "$DEV" -b 460800 --before default_reset --after hard_reset \
+  write_flash "@flash_args"
+```
+
+Read a core dump:
+
+```bash
+cd "$REPO"
+uv run --frozen python scripts/firmware.py coredump --port "$PORT" \
+  --elf firmware/elf/dgx_status_display-<elf>.elf
+```
+
+Install the service (step 5):
+
+```bash
+sed -e "s|@USER@|$USER|g" -e "s|@REPO@|$REPO|g" "$REPO/deploy/dgx-status.service" \
+  | sudo tee /etc/systemd/system/dgx-status.service >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable --now dgx-status
+```
+
+## Cut a release
 
 A `v*` tag runs `.github/workflows/release.yml`. It refuses the tag unless
 the three declared versions equal it, the tagged commit is on `main`, and
@@ -360,10 +568,12 @@ from the changelog. The tag message holds no notes.
 
    ```bash
    export VERSION=X.Y.Z
-   uv run python scripts/release_check.py version "v$VERSION"
-   uv run python scripts/release_check.py notes "$VERSION" "$(mktemp)"
+   make release-check VERSION="$VERSION"   # prints the notes it will publish
    git push origin main
    ```
+
+   Without make: `uv run python scripts/release_check.py version "v$VERSION"`
+   and `uv run python scripts/release_check.py notes "$VERSION" "$(mktemp)"`.
 
 4. Tag and push the tag:
 

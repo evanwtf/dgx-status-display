@@ -35,14 +35,33 @@ ESP32-C6-Touch-AMOLED-2.16. ESP-IDF firmware draws it with LVGL.
 | `src/dgx_status/` | The daemon. Parsers (`procfs.py`, `sysfs.py`, `occupant.py`), NVML (`gpu.py`), frame encoder (`frame.py`), `collector.py`, `serial_link.py`, `daemon.py`, `cli.py`. |
 | `tests/` | One file per module. `fixtures/spark/` holds /proc and /sys files copied from a DGX. No hook may rewrite them. |
 | `firmware/` | ESP-IDF project. `main/logic/` is pure C (frames, formatting, tiles, carousel, palette, history, settings) with host tests in `firmware/test/`. `main/view.c` is LVGL only; `firmware/test/preview/` renders it on the host. `main/fonts/` is generated. `main/board.h` cites the pin sources. |
-| `scripts/` | `firmware.py` (build, test, merge and preview in the pinned IDF image), `gen_fonts.py` (the value fonts), `check_public.py` (the public-repo guard), `release_check.py` (the release checks: tag against the three versions, changelog notes, merged image, built versions, asset staging), `capture_fixtures.py`. |
+| `Makefile` | A thin wrapper over `uv` and `scripts/`. `make` lists the targets; `tests/test_makefile.py` checks each with `make -n`. |
+| `scripts/` | `firmware.py` (build, test, merge and preview in the pinned IDF image, and the board steps: flash, flash-merged, backup, monitor, coredump), `gen_fonts.py` (the value fonts), `check_public.py` (the public-repo guard), `release_check.py` (the release checks: tag against the three versions, changelog notes, merged image, built versions, asset staging), `capture_fixtures.py`. |
 | `deploy/` | The systemd unit. |
 | `.github/workflows/` | `check.yml` (every push to main and every PR; also called by the release), `release.yml` (a `v*` tag: refusals, checks, build, publish). |
 | `docs/` | `protocol.md` (the wire format), `plan.md`, `changelog.md`. |
 
 ## Commands
 
-Run these before you push. CI runs the same steps.
+Run these before you push. `make` lists every target; each one calls a
+script or `uv`, and never repeats the image pin.
+
+```bash
+make setup         # uv sync --frozen, pre-commit install
+make check         # CI's python job: ruff format, ruff check, mypy, pytest, no skips
+make fw-test       # C unit tests, ASan + UBSan
+make fw-build      # idf.py build, zero warnings in main/
+make fw-preview    # render the UI to firmware/preview/*.png
+make fonts-check
+make dry-run
+```
+
+The board targets (`backup`, `flash`, `flash-merged`, `coredump`,
+`monitor`) and `install-service` change the board or the system: run them
+only when a person asks (see Hardware safety). Check them with `make -n`.
+
+The raw commands behind the targets. CI's python job runs `make check`; its
+firmware job runs the firmware steps as written here:
 
 ```bash
 uv sync
