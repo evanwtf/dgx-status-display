@@ -70,17 +70,47 @@ overview fields always fit.
 {"v":1,"t":1795664697,"tz_s":-18000,"host":"test-host","up_s":1214815,"load1":0.35,"load5":0.48,"load15":0.36,"cpu_pct":0.3,"mem_used_gib":7.2,"mem_total_gib":121.7,"gpu_pct":0,"gpu_w":4,"gpu_c":44,"occ":"idle","fan0_rpm":2790,"fan1_rpm":4185,"board_c":45.8,"nvme_c":44.9,"nic_c":47.0,"th":[["tz0",45.8],["tz1",43.9],["nvme",44.9],["nic0",47.0],["wifi",42.0]]}
 ```
 
-## Display to host: hello
+## Display to host: hello and diag
 
-The firmware sends one line when it boots, and again when frames start
-after a NO DATA period (for example, after the daemon restarts):
+The display sends JSON lines too. The daemon ignores any line that is not a
+JSON object (the ROM boot banner also comes out on this port).
+
+### hello
+
+One line when the firmware boots, and again when frames start after a NO DATA
+period (for example, after the daemon restarts):
 
 ```json
-{"hello":"dgx-status-display","fw":"0.1.0"}
+{"hello":"dgx-status-display","fw":"0.1.0","elf":"a32ef43a44370710","rst":"task_wdt","why":"Task watchdog got triggered."}
 ```
 
-The daemon logs it at INFO. The hello can be lost: the board sends it
-whether or not the host has the port open.
+| Field | Meaning |
+| --- | --- |
+| `hello`, `fw` | Always present. The firmware version. |
+| `elf` | Optional. The first 16 hex digits of the SHA-256 of the build's ELF file; `scripts/firmware.py build` keeps that ELF as `firmware/elf/dgx_status_display-<elf>.elf`. |
+| `rst` | Optional. Why the chip last reset (`esp_reset_reason()`): `poweron`, `sw`, `usb`, `panic`, `task_wdt`, `int_wdt`, `wdt`, `brownout`, `cpu_lockup`, ... |
+| `why` | Optional, only after a crash reset: the panic reason from the core dump in flash, at most 96 characters, JSON-escaped. |
+
+The daemon logs the hello at INFO. When `rst` is `panic`, `task_wdt`,
+`int_wdt`, `wdt` or `cpu_lockup`, it also logs a WARNING with `why`. The
+hello can be lost: the board sends it whether or not the host has the port
+open.
+
+### diag
+
+One line every 60 s (the first about 15 s after boot). The daemon logs it at
+DEBUG.
+
+```json
+{"diag":1,"up_s":75,"stk_rx":2100,"stk_ui":3300,"lv_used_pct":41,"lv_free":28000,"lv_big":20000,"heap":180000,"heap_min":170000}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `up_s` | Seconds since boot. |
+| `stk_rx`, `stk_ui` | The lowest free stack so far, in bytes, of the serial RX task and the LVGL task. |
+| `lv_used_pct`, `lv_free`, `lv_big` | The LVGL heap: percent used, free bytes, largest free block. |
+| `heap`, `heap_min` | The ESP-IDF heap: free bytes now, and the lowest since boot. |
 
 ## Validation on the display
 

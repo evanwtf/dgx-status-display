@@ -68,6 +68,29 @@ def open_port(path: str) -> Port:
     )
 
 
+# Reset reasons that mean the board crashed (docs/protocol.md, `rst`).
+CRASH_RESETS = frozenset({"panic", "int_wdt", "task_wdt", "wdt", "cpu_lockup"})
+
+
+def log_hello(msg: dict[str, Any]) -> None:
+    """INFO for a normal boot; WARNING, with the panic reason, after a crash."""
+    rst = msg.get("rst")
+    logger.info(
+        "display says hello: %s, fw %s, elf %s, reset %s",
+        msg.get("hello"),
+        msg.get("fw"),
+        msg.get("elf", "?"),
+        rst if rst is not None else "?",
+    )
+    if rst in CRASH_RESETS:
+        logger.warning(
+            "display rebooted after a crash (%s): %s; read the core dump with "
+            "scripts/firmware.py coredump",
+            rst,
+            msg.get("why") or "no reason recorded",
+        )
+
+
 class SerialLink:
     def __init__(
         self,
@@ -180,9 +203,9 @@ class SerialLink:
         if not isinstance(msg, dict):
             return None
         if "hello" in msg:
-            logger.info(
-                "display says hello: %s, fw %s", msg.get("hello"), msg.get("fw")
-            )
+            log_hello(msg)
+        elif "diag" in msg:
+            logger.debug("display diag: %s", msg)
         return msg
 
     def close(self) -> None:

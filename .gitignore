@@ -25,3 +25,6 @@ backup/
 /.cache/
 firmware/preview/
 firmware/test/preview/build/
+# ELF of each build, and core dumps read from the board
+firmware/elf/
+firmware/coredump/

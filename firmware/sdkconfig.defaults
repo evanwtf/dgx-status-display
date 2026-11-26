@@ -26,9 +26,17 @@ CONFIG_LV_USE_LOG=n
 CONFIG_LV_USE_DEMO_WIDGETS=n
 CONFIG_LV_USE_DEMO_BENCHMARK=n
 
-# Task watchdog: the LVGL task subscribes (ui.c). A hung UI panics and the
+# Task watchdog: the LVGL task subscribes (ui.c, from its LVGL timer only). A hung UI panics and the
 # board reboots, instead of freezing on a stale LIVE screen.
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_PANIC=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# Core dump to flash (partitions.csv), ELF with a checksum, so a crash can be
+# read from the host: scripts/firmware.py coredump. The boot hello also
+# carries the panic reason from it (serial_rx.c).
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_SHA256=y
+CONFIG_ESP_COREDUMP_CHECK_BOOT=y

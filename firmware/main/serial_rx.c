@@ -6,12 +6,16 @@
 #include "driver/usb_serial_jtag.h"
 #include "esp_app_desc.h"
 #include "esp_check.h"
+#include "esp_core_dump.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "logic/line_reader.h"
+#include "logic/report.h"
 
 static const char *TAG = "serial_rx";
 
@@ -24,6 +28,9 @@ static const char *TAG = "serial_rx";
 #define RX_TASK_PRIORITY 3
 /* At most one log line per this interval for rejected input. */
 #define REJECT_LOG_MS 10000
+/* One diag line this often; the first one this soon after boot. */
+#define DIAG_PERIOD_MS 60000
+#define DIAG_FIRST_MS 15000
 
 static SemaphoreHandle_t s_lock;
 static rx_snapshot_t s_state;
@@ -33,21 +40,90 @@ static line_reader_t s_reader;
 static TaskHandle_t s_task;
 static int64_t s_last_reject_log_ms = -REJECT_LOG_MS;
 static uint32_t s_rejects_since_log;
+/* Why this boot happened, read once at start; sent in every hello. */
+static const char *s_rst = "unknown";
+static char s_why[REPORT_WHY_MAX + 1];
+static char s_elf[17];
+/* Diag values the UI task reports (serial_rx_set_ui_diag). */
+static report_diag_t s_ui_diag;
 
 static int64_t now_ms(void)
 {
     return esp_timer_get_time() / 1000;
 }
 
+static const char *reset_name(esp_reset_reason_t r)
+{
+    switch (r) {
+    case ESP_RST_POWERON: return "poweron";
+    case ESP_RST_EXT: return "ext";
+    case ESP_RST_SW: return "sw";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deepsleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    case ESP_RST_USB: return "usb";
+    case ESP_RST_JTAG: return "jtag";
+    case ESP_RST_EFUSE: return "efuse";
+    case ESP_RST_PWR_GLITCH: return "pwr_glitch";
+    case ESP_RST_CPU_LOCKUP: return "cpu_lockup";
+    default: return "unknown";
+    }
+}
+
+/* Reset reason, and after a crash the panic reason from the core dump in
+ * flash (CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH). The dump survives the reset;
+ * RTC memory would need a panic hook. */
+static void read_boot_cause(void)
+{
+    esp_reset_reason_t r = esp_reset_reason();
+    s_rst = reset_name(r);
+    s_why[0] = '\0';
+    bool crashed = r == ESP_RST_PANIC || r == ESP_RST_INT_WDT || r == ESP_RST_TASK_WDT ||
+                   r == ESP_RST_WDT || r == ESP_RST_CPU_LOCKUP;
+    if (crashed) {
+        char why[200];
+        if (esp_core_dump_get_panic_reason(why, sizeof(why)) == ESP_OK) {
+            /* Cut to fit; report_hello() cuts and escapes it again. */
+            strncpy(s_why, why, sizeof(s_why) - 1);
+            s_why[sizeof(s_why) - 1] = '\0';
+        }
+    }
+    esp_app_get_elf_sha256(s_elf, sizeof(s_elf));
+    ESP_LOGW(TAG, "boot: reset reason %s%s%s", s_rst, s_why[0] ? ": " : "", s_why);
+}
+
+static void send_line(const char *line, size_t n)
+{
+    if (n > 0) {
+        /* Short timeout: with no host reading, the line is dropped. */
+        usb_serial_jtag_write_bytes(line, n, pdMS_TO_TICKS(20));
+    }
+}
+
 static void send_hello(void)
 {
-    char line[96];
-    int n = snprintf(line, sizeof(line), "{\"hello\":\"dgx-status-display\",\"fw\":\"%s\"}\n",
-                     esp_app_get_description()->version);
-    if (n > 0 && (size_t)n < sizeof(line)) {
-        /* Short timeout: with no host reading, the hello is dropped. */
-        usb_serial_jtag_write_bytes(line, (size_t)n, pdMS_TO_TICKS(20));
-    }
+    char line[256];
+    size_t n = report_hello(line, sizeof(line), esp_app_get_description()->version, s_elf,
+                            s_rst, s_why);
+    send_line(line, n);
+}
+
+static void send_diag(int64_t now)
+{
+    report_diag_t d;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    d = s_ui_diag;
+    xSemaphoreGive(s_lock);
+    d.up_s = now / 1000;
+    d.stk_rx = serial_rx_stack_free();
+    d.heap = (uint32_t)esp_get_free_heap_size();
+    d.heap_min = (uint32_t)esp_get_minimum_free_heap_size();
+    char line[256];
+    send_line(line, report_diag(line, sizeof(line), &d));
 }
 
 /* Count a rejected line. Log the first one, then at most one summary line
@@ -92,7 +168,14 @@ static void rx_task(void *arg)
     (void)arg;
     static uint8_t chunk[READ_CHUNK];
     send_hello();
+    int64_t next_diag_ms = now_ms() + DIAG_FIRST_MS;
     for (;;) {
+        /* This task is the only writer to USB-Serial-JTAG, so lines from
+         * different tasks never interleave. */
+        if (now_ms() >= next_diag_ms) {
+            send_diag(now_ms());
+            next_diag_ms = now_ms() + DIAG_PERIOD_MS;
+        }
         int n = usb_serial_jtag_read_bytes(chunk, sizeof(chunk), pdMS_TO_TICKS(100));
         for (int i = 0; i < n; i++) {
             switch (line_reader_feed(&s_reader, chunk[i])) {
@@ -116,6 +199,7 @@ esp_err_t serial_rx_start(void)
     status_frame_clear(&s_state.frame);
     link_init(&s_state.link);
     line_reader_init(&s_reader);
+    read_boot_cause();
 
     usb_serial_jtag_driver_config_t cfg = {
         .rx_buffer_size = RX_BUF_BYTES,
@@ -138,4 +222,15 @@ void serial_rx_get(rx_snapshot_t *out)
 uint32_t serial_rx_stack_free(void)
 {
     return s_task ? (uint32_t)uxTaskGetStackHighWaterMark(s_task) : 0;
+}
+
+void serial_rx_set_ui_diag(uint32_t stk_ui, uint32_t lv_used_pct, uint32_t lv_free,
+                           uint32_t lv_big)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_ui_diag.stk_ui = stk_ui;
+    s_ui_diag.lv_used_pct = lv_used_pct;
+    s_ui_diag.lv_free = lv_free;
+    s_ui_diag.lv_big = lv_big;
+    xSemaphoreGive(s_lock);
 }

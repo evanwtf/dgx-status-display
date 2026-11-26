@@ -155,6 +155,26 @@ docker run --rm --device="$DEV" -v "$REPO:/project" -w /project/firmware/build "
 sudo systemctl start dgx-status
 ```
 
+## Read a crash
+
+The board keeps a core dump in flash after a panic or a watchdog reset, and
+its next hello says why it reset; the daemon logs that as a WARNING. To read
+the dump (esptool resets the chip, so stop the service first):
+
+```bash
+cd "$REPO"
+sudo systemctl stop dgx-status
+uv run python scripts/firmware.py coredump --port "$PORT" \
+  --elf firmware/elf/dgx_status_display-<elf>.elf
+sudo systemctl start dgx-status
+```
+
+`<elf>` is the `elf` value from the hello line in the daemon log. Without
+`--elf` the step uses the current build's ELF. It prints the panic reason,
+the crashed task and its backtrace, and saves the raw core in
+`firmware/coredump/`; `--core <file>` decodes a saved core again without the
+board.
+
 ## Restore the factory firmware
 
 ```bash

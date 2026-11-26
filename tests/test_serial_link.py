@@ -317,3 +317,47 @@ def test_pty_hangup_between_frames_then_replug(tmp_path: Path) -> None:
         link.close()
     os.close(m2)
     os.close(s2)
+
+
+def test_hello_after_a_crash_is_a_warning_with_the_reason(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    opener, clock = Opener(), Clock()
+    link = _link(opener, clock)
+    link.send(b"x\n")
+    opener.ports[0].incoming = (
+        b'{"hello":"dgx-status-display","fw":"0.1.0","elf":"a32ef43a44370710",'
+        b'"rst":"task_wdt","why":"Task watchdog got triggered"}\n'
+    )
+    with caplog.at_level(logging.INFO, logger="dgx_status.serial_link"):
+        link.poll()
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "task_wdt" in warnings[0].getMessage()
+    assert "Task watchdog got triggered" in warnings[0].getMessage()
+    assert any(
+        "elf a32ef43a44370710, reset task_wdt" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_hello_after_power_on_is_info_only(caplog: pytest.LogCaptureFixture) -> None:
+    opener, clock = Opener(), Clock()
+    link = _link(opener, clock)
+    link.send(b"x\n")
+    opener.ports[0].incoming = b'{"hello":"d","fw":"1","rst":"poweron"}\n'
+    with caplog.at_level(logging.INFO, logger="dgx_status.serial_link"):
+        link.poll()
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_diag_is_logged_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    opener, clock = Opener(), Clock()
+    link = _link(opener, clock)
+    link.send(b"x\n")
+    opener.ports[0].incoming = b'{"diag":1,"stk_ui":3300,"lv_used_pct":41}\n'
+    with caplog.at_level(logging.DEBUG, logger="dgx_status.serial_link"):
+        msgs = link.poll()
+    assert msgs == [{"diag": 1, "stk_ui": 3300, "lv_used_pct": 41}]
+    debug = [r for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any("stk_ui" in r.getMessage() for r in debug)
+    assert not [r for r in caplog.records if r.levelno >= logging.INFO]

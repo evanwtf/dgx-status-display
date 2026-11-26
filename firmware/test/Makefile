@@ -23,7 +23,7 @@ CJSON_CFLAGS := -std=c99 -O1 -g -fsanitize=address,undefined -I$(CJSON_DIR) \
 
 LOGIC := ../main/logic/frame_parse.c ../main/logic/line_reader.c \
 	../main/logic/link_state.c ../main/logic/fmt.c ../main/logic/burnin.c \
-	../main/logic/tiles.c ../main/logic/carousel.c
+	../main/logic/tiles.c ../main/logic/carousel.c ../main/logic/report.c
 
 .PHONY: test clean
 test: $(BUILD)/test_logic

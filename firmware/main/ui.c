@@ -91,12 +91,20 @@ static void feed_watchdog(void)
     esp_task_wdt_reset();
 }
 
+/* Stack and LVGL heap: logged on UART0 once a minute, and handed to
+ * serial_rx for the diag line the host logs. */
 static void log_stack(int64_t now)
 {
     s_lvgl_stack_free = (uint32_t)uxTaskGetStackHighWaterMark(NULL);
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    serial_rx_set_ui_diag(s_lvgl_stack_free, mon.used_pct, (uint32_t)mon.free_size,
+                          (uint32_t)mon.free_biggest_size);
     if (now - s_last_stack_log_ms >= STACK_LOG_MS) {
-        ESP_LOGI(TAG, "stack free (high-water): rx %lu B, lvgl %lu B",
-                 (unsigned long)serial_rx_stack_free(), (unsigned long)s_lvgl_stack_free);
+        ESP_LOGI(TAG, "stack free (high-water): rx %lu B, lvgl %lu B; lv heap %u%% used, "
+                      "largest free %lu B",
+                 (unsigned long)serial_rx_stack_free(), (unsigned long)s_lvgl_stack_free,
+                 (unsigned)mon.used_pct, (unsigned long)mon.free_biggest_size);
         s_last_stack_log_ms = now;
     }
 }

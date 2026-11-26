@@ -14,6 +14,7 @@
 #include "fmt.h"
 #include "line_reader.h"
 #include "link_state.h"
+#include "report.h"
 #include "status.h"
 #include "tiles.h"
 
@@ -599,6 +600,46 @@ static void test_carousel(void)
     CHECK(c.page == PAGE_HOST);
 }
 
+static void test_report_hello(void)
+{
+    char b[300];
+    size_t n = report_hello(b, sizeof(b), "0.1.0", NULL, NULL, NULL);
+    CHECK_STR(b, "{\"hello\":\"dgx-status-display\",\"fw\":\"0.1.0\"}\n");
+    CHECK(n == strlen(b));
+    report_hello(b, sizeof(b), "0.1.0", "1a2b3c4d5e6f7a8b", "poweron", "");
+    CHECK_STR(b, "{\"hello\":\"dgx-status-display\",\"fw\":\"0.1.0\","
+                 "\"elf\":\"1a2b3c4d5e6f7a8b\",\"rst\":\"poweron\"}\n");
+    /* The panic reason is escaped: quotes, backslashes, control bytes and
+     * non-ASCII never break the JSON line. */
+    report_hello(b, sizeof(b), "0.1.0", NULL, "task_wdt",
+                 "wdt: \"main\" \\ late\n\x01\xC3\xA9");
+    CHECK_STR(b, "{\"hello\":\"dgx-status-display\",\"fw\":\"0.1.0\",\"rst\":\"task_wdt\","
+                 "\"why\":\"wdt: \\\"main\\\" \\\\ late ???\"}\n");
+    /* A long reason is cut to REPORT_WHY_MAX characters. */
+    char why[300];
+    memset(why, 'x', sizeof(why) - 1);
+    why[sizeof(why) - 1] = '\0';
+    n = report_hello(b, sizeof(b), "0.1.0", NULL, "panic", why);
+    CHECK(n > 0 && n < sizeof(b));
+    CHECK(strstr(b, "\"why\":\"") != NULL);
+    CHECK(strlen(strstr(b, "\"why\":\"")) == strlen("\"why\":\"") + REPORT_WHY_MAX + 3);
+    /* Too small a buffer: nothing, never a cut line. */
+    CHECK(report_hello(b, 20, "0.1.0", NULL, NULL, NULL) == 0);
+    CHECK_STR(b, "");
+}
+
+static void test_report_diag(void)
+{
+    char b[300];
+    report_diag_t d = {.up_s = 75, .stk_rx = 2100, .stk_ui = 3300, .lv_used_pct = 41,
+                       .lv_free = 28000, .lv_big = 20000, .heap = 180000, .heap_min = 170000};
+    size_t n = report_diag(b, sizeof(b), &d);
+    CHECK_STR(b, "{\"diag\":1,\"up_s\":75,\"stk_rx\":2100,\"stk_ui\":3300,\"lv_used_pct\":41,"
+                 "\"lv_free\":28000,\"lv_big\":20000,\"heap\":180000,\"heap_min\":170000}\n");
+    CHECK(n == strlen(b));
+    CHECK(report_diag(b, 10, &d) == 0);
+}
+
 int main(void)
 {
     test_parse_real_frame();
@@ -620,6 +661,8 @@ int main(void)
     test_page_tiles_real_frame();
     test_page_tiles_busy_and_missing();
     test_carousel();
+    test_report_hello();
+    test_report_diag();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

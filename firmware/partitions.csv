@@ -3,3 +3,7 @@
 nvs,      data, nvs,     0x9000,  0x6000,
 phy_init, data, phy,     0xf000,  0x1000,
 factory,  app,  factory, 0x10000, 4M,
+# Core dump after a panic or watchdog reset. scripts/firmware.py coredump
+# reads and decodes it. 128 KB: an ELF dump of every task's stack and TCB is
+# about 30 KB; the rest is headroom.
+coredump, data, coredump, 0x410000, 128K,

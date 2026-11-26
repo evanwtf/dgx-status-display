@@ -18,6 +18,7 @@ idf_component_register(
         "logic/burnin.c"
         "logic/tiles.c"
         "logic/carousel.c"
+        "logic/report.c"
     INCLUDE_DIRS "." "logic"
     REQUIRES
         esp_driver_i2c
@@ -28,6 +29,7 @@ idf_component_register(
         esp_timer
         esp_app_format
         json
+        espcoredump
 )
 # Our own code builds with warnings as errors. Vendor components do not.
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror -Wshadow)
