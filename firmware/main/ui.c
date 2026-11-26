@@ -17,6 +17,7 @@
 #include "logic/carousel.h"
 #include "logic/link_state.h"
 #include "serial_rx.h"
+#include "settings_nvs.h"
 #include "view.h"
 
 #define UI_PERIOD_MS 250
@@ -38,6 +39,10 @@ static shift_t s_last_shift = {127, 127};
 /* Static: too big for the LVGL task stack. */
 static rx_snapshot_t s_rx;
 static view_model_t s_model;
+static chart_style_t s_style = CHART_LEVEL;
+/* Render time of one LVGL refresh: the slowest since the last log line. */
+static int64_t s_refr_start_us;
+static uint32_t s_refr_max_ms;
 
 static int64_t now_ms(void)
 {
@@ -51,6 +56,15 @@ static void on_tap(void)
     s_last_change_ms = now_ms();
 }
 
+/* The "Charts" row on the detail page: switch, store, keep the page open. */
+static void on_chart_toggle(void)
+{
+    s_style = settings_toggle_chart_style(settings_nvs_chart_store(), s_style);
+    carousel_long_press(&s_carousel, now_ms()); /* restart the detail timeout */
+    s_last_change_ms = now_ms();
+    ESP_LOGI(TAG, "charts: %s", chart_style_name(s_style));
+}
+
 static void on_long_press(void)
 {
     carousel_long_press(&s_carousel, now_ms());
@@ -62,6 +76,17 @@ static void on_refresh_ready(lv_event_t *e)
 {
     (void)e;
     s_first_refresh_done = true;
+    if (s_refr_start_us) {
+        uint32_t ms = (uint32_t)((esp_timer_get_time() - s_refr_start_us) / 1000);
+        s_refr_max_ms = ms > s_refr_max_ms ? ms : s_refr_max_ms;
+        s_refr_start_us = 0;
+    }
+}
+
+static void on_refresh_start(lv_event_t *e)
+{
+    (void)e;
+    s_refr_start_us = esp_timer_get_time();
 }
 
 /* The LVGL task feeds the task watchdog from this timer. If the LVGL task
@@ -113,10 +138,12 @@ static void log_stack(int64_t now)
     esp_log_level_t level = near_miss ? ESP_LOG_WARN : ESP_LOG_INFO;
     ESP_LOG_LEVEL(level, TAG,
                   "free: stack rx %lu B, lvgl %lu B; lv heap %u%% used, largest %lu B; "
-                  "heap %lu B, min %lu B",
+                  "heap %lu B, min %lu B; slowest refresh %lu ms",
                   (unsigned long)rx, (unsigned long)s_lvgl_stack_free, (unsigned)mon.used_pct,
                   (unsigned long)mon.free_biggest_size, (unsigned long)esp_get_free_heap_size(),
-                  (unsigned long)esp_get_minimum_free_heap_size());
+                  (unsigned long)esp_get_minimum_free_heap_size(),
+                  (unsigned long)s_refr_max_ms);
+    s_refr_max_ms = 0;
 }
 
 /* t is NULL only for the first call, from ui_init() in the main task. */
@@ -155,6 +182,8 @@ static void tick(lv_timer_t *t)
     }
 
     view_model_fill(&s_model, &s_rx.frame, st, link_age_s(&s_rx.link, now), &s_carousel);
+    s_model.style = s_style;
+    s_model.hist_heights = serial_rx_hist_heights;
     s_model.accepted = s_rx.accepted;
     s_model.rejected = s_rx.rejected;
     s_model.fw_version = esp_app_get_description()->version;
@@ -168,8 +197,11 @@ void ui_init(void)
     int64_t now = now_ms();
     carousel_init(&s_carousel, now);
     s_last_change_ms = now;
-    view_init(lv_screen_active(), on_tap, on_long_press);
+    s_style = settings_chart_style(settings_nvs_chart_store());
+    view_init(lv_screen_active(), on_tap, on_long_press, on_chart_toggle);
     lv_display_add_event_cb(lv_display_get_default(), on_refresh_ready, LV_EVENT_REFR_READY,
+                            NULL);
+    lv_display_add_event_cb(lv_display_get_default(), on_refresh_start, LV_EVENT_REFR_START,
                             NULL);
     tick(NULL);
     lv_timer_create(tick, UI_PERIOD_MS, NULL);

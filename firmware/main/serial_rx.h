@@ -14,6 +14,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "logic/history.h"
 #include "logic/link_state.h"
 #include "logic/status.h"
 
@@ -33,3 +34,8 @@ void serial_rx_get(rx_snapshot_t *out);
 /* Lowest free stack the RX task has had, in bytes (ESP-IDF FreeRTOS counts
  * bytes). 0 before the task starts. */
 uint32_t serial_rx_stack_free(void);
+
+/* Chart column heights from the 2-minute history (see hist_heights()),
+ * computed under the lock, so no task keeps a copy. Safe from any task. */
+bool serial_rx_hist_heights(hist_metric_t m, const status_frame_t *f, int height,
+                            int16_t out[HIST_LEN]);

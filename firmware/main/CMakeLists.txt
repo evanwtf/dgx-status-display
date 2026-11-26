@@ -6,6 +6,7 @@ idf_component_register(
         "serial_rx.c"
         "ui.c"
         "view.c"
+        "settings_nvs.c"
         "fonts/jbm_num_110.c"
         "fonts/jbm_num_82.c"
         "fonts/jbm_mix_66.c"
@@ -23,6 +24,8 @@ idf_component_register(
         "logic/carousel.c"
         "logic/report.c"
         "logic/palette.c"
+        "logic/history.c"
+        "logic/settings.c"
     INCLUDE_DIRS "." "logic"
     REQUIRES
         esp_driver_i2c
@@ -34,6 +37,7 @@ idf_component_register(
         esp_app_format
         json
         espcoredump
+        nvs_flash
 )
 # Our own code builds with warnings as errors. Vendor components do not.
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror -Wshadow)

@@ -6,6 +6,15 @@ First version: phase 1, USB serial.
 
 After the first board test:
 
+- Design pass: colored tiles whose level fill (or, as an option, a 2-minute
+  history chart) shows the reading; temperature tiles change hue at the
+  thresholds; Barlow Semi Condensed for words; a WCAG contrast test for
+  every text color over every shade; the four tiles' outer corners follow
+  the panel's corners.
+- Board logs on USB on purpose, relayed by the daemon; a core dump in flash
+  and `scripts/firmware.py coredump`; the reset reason in the hello.
+- Fix: the task watchdog subscribed the main task and rebooted the board
+  every 10 s.
 - Firmware: a carousel of three 2×2 tile pages (GPU, Cooling, Host) with big
   values, a top strip (link dot, clock, page dots), tap for the next page,
   long press for every temperature. NO DATA stops the carousel.

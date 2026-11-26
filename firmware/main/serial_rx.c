@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "logic/history.h"
 #include "logic/line_reader.h"
 #include "logic/report.h"
 
@@ -33,6 +34,8 @@ static rx_snapshot_t s_state;
 /* The parser's scratch frame lives here, not on the task stack. */
 static status_frame_t s_scratch;
 static line_reader_t s_reader;
+/* Two minutes of past readings, fed by each accepted frame (s_lock). */
+static history_t s_hist;
 static TaskHandle_t s_task;
 static int64_t s_last_reject_log_ms = -REJECT_LOG_MS;
 static uint32_t s_rejects_since_log;
@@ -135,6 +138,7 @@ static void handle_line(const char *line, size_t len)
     bool resumed = link_state(&s_state.link, now) == LINK_NO_DATA;
     s_state.frame = s_scratch;
     link_frame_ok(&s_state.link, now);
+    hist_push_frame(&s_hist, &s_scratch, now);
     s_state.seq++;
     s_state.accepted++;
     xSemaphoreGive(s_lock);
@@ -172,6 +176,7 @@ esp_err_t serial_rx_start(void)
     status_frame_clear(&s_state.frame);
     link_init(&s_state.link);
     line_reader_init(&s_reader);
+    hist_init(&s_hist);
     read_boot_cause();
 
     usb_serial_jtag_driver_config_t cfg = {
@@ -195,4 +200,13 @@ void serial_rx_get(rx_snapshot_t *out)
 uint32_t serial_rx_stack_free(void)
 {
     return s_task ? (uint32_t)uxTaskGetStackHighWaterMark(s_task) : 0;
+}
+
+bool serial_rx_hist_heights(hist_metric_t m, const status_frame_t *f, int height,
+                            int16_t out[HIST_LEN])
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool ok = hist_heights(&s_hist, m, f, height, out);
+    xSemaphoreGive(s_lock);
+    return ok;
 }

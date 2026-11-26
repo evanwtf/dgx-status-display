@@ -20,7 +20,7 @@ APP_SRC := preview.c png.c $(FW)/main/view.c \
 	$(wildcard $(FW)/main/fonts/*.c) \
 	$(FW)/main/logic/tiles.c $(FW)/main/logic/carousel.c $(FW)/main/logic/fmt.c \
 	$(FW)/main/logic/link_state.c $(FW)/main/logic/frame_parse.c \
-	$(FW)/main/logic/palette.c
+	$(FW)/main/logic/palette.c $(FW)/main/logic/history.c $(FW)/main/logic/settings.c
 
 KCONFIG := $(BUILD)/lv_kconfig.h
 COMMON := -O1 -include $(KCONFIG) -I$(LVGL_DIR) -I$(FW)/main

@@ -206,6 +206,13 @@ unit.
   fill eases to a new level in 400 ms. Temperature tiles turn from blue to
   amber at the threshold and red above it, with a bright edge on top:
   GPU 80 / 90 °C, board and SSD 70 / 80 °C.
+- **Charts (option):** on the detail page (long press), the "Charts" row
+  switches between **Level** (the default) and **2-minute history**: the
+  tile's background becomes an area chart of its last 120 one-second
+  samples, on a fixed scale (0–100 %, 0–240 W, 0–13500 RPM, 0–total GiB,
+  20–100 °C). A missing reading or a NO DATA period is a gap. The numbers
+  stay the instantaneous reading. The choice survives a reboot (NVS). The
+  history lives on the board and starts empty after a reboot.
 - **Top strip:** the page title, the host clock and a link dot (gold LIVE,
   amber STALE with the age).
 - **Touch:** a tap moves to the next page and restarts the 10-second timer.

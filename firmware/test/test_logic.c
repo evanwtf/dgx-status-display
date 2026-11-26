@@ -644,9 +644,13 @@ static void test_tile_colors_and_levels(void)
     CHECK_NEAR(t[1].fill, 4.0f / POWER_FULL_SCALE_W);
     CHECK(t[2].hue == HUE_COOL && t[2].fill < 0); /* temps: hue, no fill */
     CHECK(t[3].hue == HUE_BRONZE && t[3].fill < 0);
+    CHECK(t[0].hist == HIST_GPU_PCT && t[1].hist == HIST_GPU_W && t[2].hist == HIST_GPU_C);
+    CHECK(t[3].hist == HIST_NONE); /* text tiles have no chart */
 
     page_tiles(PAGE_COOLING, &f, t);
     CHECK(t[0].hue == HUE_VIOLET && t[1].hue == HUE_VIOLET);
+    CHECK(t[0].hist == HIST_FAN0 && t[1].hist == HIST_FAN1);
+    CHECK(t[2].hist == HIST_BOARD_C && t[3].hist == HIST_NVME_C);
     CHECK_NEAR(t[0].fill, 2790.0f / FAN_FULL_SCALE_RPM);
 
     page_tiles(PAGE_HOST, &f, t);
@@ -654,6 +658,8 @@ static void test_tile_colors_and_levels(void)
     CHECK_NEAR(t[1].fill, 7.2f / 121.7f);
     CHECK(t[2].hue == HUE_BRONZE && t[2].fill < 0); /* load: no CPU count */
     CHECK(t[3].hue == HUE_BRONZE && t[3].fill < 0);
+    CHECK(t[0].hist == HIST_CPU_PCT && t[1].hist == HIST_MEM_GIB);
+    CHECK(t[2].hist == HIST_NONE && t[3].hist == HIST_NONE); /* load: no scale */
 
     /* Temperature hue follows the threshold table; fills clamp to 0..1. */
     f.gpu_c = 85;

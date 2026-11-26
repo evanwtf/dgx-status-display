@@ -30,7 +30,7 @@ ESP32-C6-Touch-AMOLED-2.16. ESP-IDF firmware draws it with LVGL.
 | --- | --- |
 | `src/dgx_status/` | The daemon. Parsers (`procfs.py`, `sysfs.py`, `occupant.py`), NVML (`gpu.py`), frame encoder (`frame.py`), `collector.py`, `serial_link.py`, `daemon.py`, `cli.py`. |
 | `tests/` | One file per module. `fixtures/spark/` holds /proc and /sys files copied from a DGX. No hook may rewrite them. |
-| `firmware/` | ESP-IDF project. `main/logic/` is pure C (frames, formatting, tiles, carousel) with host tests in `firmware/test/`. `main/view.c` is LVGL only; `firmware/test/preview/` renders it on the host. `main/fonts/` is generated. `main/board.h` cites the pin sources. |
+| `firmware/` | ESP-IDF project. `main/logic/` is pure C (frames, formatting, tiles, carousel, palette, history, settings) with host tests in `firmware/test/`. `main/view.c` is LVGL only; `firmware/test/preview/` renders it on the host. `main/fonts/` is generated. `main/board.h` cites the pin sources. |
 | `scripts/` | `firmware.py` (build, test and preview in the pinned IDF image), `gen_fonts.py` (the value fonts), `check_public.py` (the public-repo guard), `capture_fixtures.py`. |
 | `deploy/` | The systemd unit. |
 | `docs/` | `protocol.md` (the wire format), `plan.md`, `changelog.md`. |

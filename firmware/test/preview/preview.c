@@ -14,6 +14,7 @@
 #include <string.h>
 
 #include "logic/carousel.h"
+#include "logic/history.h"
 #include "logic/status.h"
 #include "lvgl.h"
 #include "png.h"
@@ -24,11 +25,20 @@
 static uint16_t s_fb[W * W];
 static uint8_t s_rgb[W * W * 3];
 static int s_failed;
+static chart_style_t s_style = CHART_LEVEL;
+static history_t s_hist;
+
+static bool preview_heights(hist_metric_t m, const status_frame_t *f, int height,
+                            int16_t out[HIST_LEN])
+{
+    return hist_heights(&s_hist, m, f, height, out);
+}
+/* Level | history, side by side, for each page. */
 /* Contact sheet: every screen at half size, SHEET_COLS per row. */
 #define HALF (W / 2)
 #define SEP 8
 #define SHEET_COLS 4
-#define SHEET_MAX 16
+#define SHEET_MAX 20
 #define SHEET_W (SHEET_COLS * HALF + (SHEET_COLS - 1) * SEP)
 static uint8_t s_sheet[SHEET_W * ((SHEET_MAX / SHEET_COLS) * (HALF + SEP)) * 3];
 static int s_sheet_n;
@@ -122,6 +132,8 @@ static void show(const char *dir, const char *name, const status_frame_t *f, lin
     view_model_t m;
     memset(&m, 0, sizeof(m));
     view_model_fill(&m, f, st, age_s, &c);
+    m.style = s_style;
+    m.hist_heights = preview_heights;
     m.accepted = 3600;
     m.rejected = 2;
     m.fw_version = "preview";
@@ -130,6 +142,36 @@ static void show(const char *dir, const char *name, const status_frame_t *f, lin
     render(&m);
     save(dir, name);
     add_to_sheet();
+}
+
+/*
+ * A synthetic 2-minute history ending at frame `now`:
+ * GPU usage ramps up with a dip, fans rise, GPU temperature crosses the
+ * warm threshold, and a 15 s gap (daemon restart) sits in the middle.
+ */
+static void synthetic_history(const status_frame_t *now)
+{
+    hist_init(&s_hist);
+    status_frame_t f = *now;
+    int64_t t = 0;
+    for (int i = 0; i < HIST_LEN; i++) {
+        if (i >= 60 && i < 75) {
+            continue; /* the gap: no frames for 15 s */
+        }
+        float k = (float)i / (HIST_LEN - 1); /* 0 .. 1 */
+        float ramp = 12 + (now->gpu_pct - 12) * k;
+        f.gpu_pct = (i >= 35 && i < 48) ? 18 : ramp; /* the dip */
+        f.gpu_w = 8 + f.gpu_pct * (now->gpu_w - 8) / (now->gpu_pct > 0 ? now->gpu_pct : 1);
+        f.gpu_c = 58 + (now->gpu_c - 58) * k;
+        f.fan0_rpm = 2700 + (now->fan0_rpm - 2700) * k;
+        f.fan1_rpm = 3000 + (now->fan1_rpm - 3000) * k * k;
+        f.board_c = 50 + (now->board_c - 50) * k;
+        f.nvme_c = 45 + (now->nvme_c - 45) * k;
+        f.cpu_pct = 20 + (now->cpu_pct - 20) * k + ((i % 9) < 3 ? 6 : 0);
+        f.mem_used_gib = 30 + (now->mem_used_gib - 30) * k;
+        t = (int64_t)i * 1000;
+        hist_push_frame(&s_hist, i == HIST_LEN - 1 ? now : &f, t);
+    }
 }
 
 static carousel_t on_page(page_id_t p)
@@ -187,7 +229,7 @@ int main(int argc, char **argv)
     lv_display_set_color_format(d, LV_COLOR_FORMAT_RGB565);
     lv_display_set_buffers(d, s_fb, NULL, sizeof(s_fb), LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_flush_cb(d, flush_cb);
-    view_init(lv_screen_active(), NULL, NULL);
+    view_init(lv_screen_active(), NULL, NULL, NULL);
     view_set_animations(false);
 
     status_frame_t real;
@@ -241,6 +283,53 @@ int main(int argc, char **argv)
     show(dir, "12-no-data-boot", &missing, LINK_NO_DATA, -1, nodata);
     carousel_t detail = {.page = PAGE_GPU, .detail = true};
     show(dir, "13-detail", &real, LINK_LIVE, 0, detail);
+
+    /* The 2-minute history style, on the busy frame (and the hot one). */
+    synthetic_history(&busy);
+    s_style = CHART_HISTORY;
+    show(dir, "14-history-gpu", &busy, LINK_LIVE, 0, on_page(PAGE_GPU));
+    show(dir, "15-history-cooling", &busy, LINK_LIVE, 0, on_page(PAGE_COOLING));
+    show(dir, "16-history-host", &busy, LINK_LIVE, 0, on_page(PAGE_HOST));
+    synthetic_history(&hot);
+    show(dir, "17-history-hot-gpu", &hot, LINK_LIVE, 0, on_page(PAGE_GPU));
+    show(dir, "18-detail-history", &real, LINK_LIVE, 0, detail);
+
+    /* Level and history side by side: one row per page. */
+    {
+        static uint8_t styles[(2 * HALF + SEP) * (3 * HALF + 2 * SEP) * 3];
+        const int sw = 2 * HALF + SEP;
+        memset(styles, 0x30, sizeof(styles));
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 2; col++) {
+                s_style = col ? CHART_HISTORY : CHART_LEVEL;
+                synthetic_history(&busy);
+                view_model_t m;
+                memset(&m, 0, sizeof(m));
+                carousel_t c = on_page((page_id_t)row);
+                view_model_fill(&m, &busy, LINK_LIVE, 0, &c);
+                m.style = s_style;
+                m.hist_heights = preview_heights;
+                render(&m);
+                for (int i = 0; i < W * W; i++) {
+                    uint16_t px = s_fb[i];
+                    uint8_t r = (uint8_t)((px >> 11) & 0x1F), g = (uint8_t)((px >> 5) & 0x3F),
+                            b = (uint8_t)(px & 0x1F);
+                    s_rgb[i * 3] = (uint8_t)((r << 3) | (r >> 2));
+                    s_rgb[i * 3 + 1] = (uint8_t)((g << 2) | (g >> 4));
+                    s_rgb[i * 3 + 2] = (uint8_t)((b << 3) | (b >> 2));
+                }
+                downscale_into(styles, sw, col * (HALF + SEP), row * (HALF + SEP));
+            }
+        }
+        char spath[512];
+        snprintf(spath, sizeof(spath), "%s/styles.png", dir);
+        if (png_write_rgb(spath, styles, sw, 3 * HALF + 2 * SEP) != 0) {
+            s_failed++;
+        } else {
+            printf("wrote %s\n", spath);
+        }
+        s_style = CHART_LEVEL;
+    }
 
     char path[512];
     int rows = (s_sheet_n + SHEET_COLS - 1) / SHEET_COLS;

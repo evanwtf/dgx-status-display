@@ -17,6 +17,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "history.h"
 #include "palette.h"
 #include "status.h"
 
@@ -68,6 +69,7 @@ typedef struct {
     tone_t tone;
     hue_t hue;    /* the tile's colors; temperatures follow their tone */
     float fill;   /* level fill, 0..1 of the tile height; < 0 = no fill */
+    hist_metric_t hist; /* the metric its history chart shows; HIST_NONE = none */
     bool is_text; /* a name, not a number: left-aligned, may change size */
 } tile_t;
 

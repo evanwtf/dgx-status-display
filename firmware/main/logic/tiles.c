@@ -168,6 +168,7 @@ static void num(tile_t *t, const char *label, float v, int decimals, tier_t tier
     t->tone = tone_for(m, v);
     t->hue = m == METRIC_NONE ? HUE_BRONZE : tone_hue(t->tone);
     t->fill = -1.0f;
+    t->hist = HIST_NONE;
     t->is_text = false;
 }
 
@@ -202,6 +203,7 @@ static void occupant(tile_t *t, const status_frame_t *f)
     t->tone = TONE_NEUTRAL;
     t->hue = HUE_BRONZE;
     t->fill = -1.0f;
+    t->hist = HIST_NONE;
     if (f->occ[0] == '\0') {
         snprintf(t->value, sizeof(t->value), "%s", FMT_DASH);
         t->tier = TIER_M;
@@ -220,9 +222,12 @@ void page_tiles(page_id_t p, const status_frame_t *f, tile_t out[TILES_PER_PAGE]
     case PAGE_GPU:
         num(&out[0], "Usage", f->gpu_pct, 0, TIER_XL, "%", METRIC_NONE);
         with_level(&out[0], HUE_TEAL, f->gpu_pct, 100.0f);
+        out[0].hist = HIST_GPU_PCT;
         num(&out[1], "Power", f->gpu_w, 0, TIER_XL, "W", METRIC_NONE);
         with_level(&out[1], HUE_INDIGO, f->gpu_w, POWER_FULL_SCALE_W);
+        out[1].hist = HIST_GPU_W;
         num(&out[2], "Temp", f->gpu_c, 0, TIER_XL, FMT_DEG "C", METRIC_GPU_C);
+        out[2].hist = HIST_GPU_C;
         occupant(&out[3], f);
         break;
     case PAGE_COOLING: {
@@ -234,25 +239,31 @@ void page_tiles(page_id_t p, const status_frame_t *f, tile_t out[TILES_PER_PAGE]
             snprintf(out[i].unit, sizeof(out[i].unit), "kRPM");
             out[i].tier = TIER_L;
             with_level(&out[i], HUE_VIOLET, rpm[i], FAN_FULL_SCALE_RPM);
+            out[i].hist = i == 0 ? HIST_FAN0 : HIST_FAN1;
         }
         num(&out[2], "Board", f->board_c, 0, TIER_XL, FMT_DEG "C", METRIC_BOARD_C);
+        out[2].hist = HIST_BOARD_C;
         num(&out[3], "SSD", f->nvme_c, 0, TIER_XL, FMT_DEG "C", METRIC_NVME_C);
+        out[3].hist = HIST_NVME_C;
         break;
     }
     case PAGE_HOST: {
         num(&out[0], "CPU", f->cpu_pct, 0, TIER_XL, "%", METRIC_NONE);
         with_level(&out[0], HUE_TEAL, f->cpu_pct, 100.0f);
+        out[0].hist = HIST_CPU_PCT;
         char total[16];
         fmt_fixed(total, sizeof(total), f->mem_total_gib, 0, 4);
         num(&out[1], "Memory", f->mem_used_gib, 1, TIER_M, "", METRIC_NONE);
         snprintf(out[1].unit, sizeof(out[1].unit), "/ %s GiB", total);
         with_level(&out[1], HUE_INDIGO, f->mem_used_gib, f->mem_total_gib);
+        out[1].hist = HIST_MEM_GIB;
         /* No CPU count in the frame, so no full scale: no fill. */
         num(&out[2], "Load avg", f->load1, 2, TIER_M, "", METRIC_NONE);
         out[3].label = "Up";
         out[3].tier = TIER_XL;
         out[3].hue = HUE_BRONZE;
         out[3].fill = -1.0f;
+        out[3].hist = HIST_NONE;
         fmt_uptime_tile(f->up_s, out[3].value, sizeof(out[3].value), out[3].unit,
                         sizeof(out[3].unit));
         break;

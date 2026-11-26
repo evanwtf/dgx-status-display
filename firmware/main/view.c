@@ -57,16 +57,21 @@ typedef struct {
     bool is_text;
     int hue;     /* -1 before the first render */
     int fill_px; /* the fill's target height; -1 = hidden */
+    /* History chart: column heights (-1 = gap) and its colors. */
+    lv_obj_t *chart;
+    int16_t cols[HIST_LEN];
+    uint32_t chart_fill, chart_line;
 } tile_view_t;
 static tile_view_t s_tile[TILES_PER_PAGE];
 static int s_last_page = -1;
 static bool s_animate = true;
 /* Detail */
 static lv_obj_t *s_d_clock, *s_d_col[2], *s_d_footer;
+static lv_obj_t *s_d_chart_value;
 /* NO DATA */
 static lv_obj_t *s_n_age, *s_n_hint;
 
-static view_cb_t s_on_tap, s_on_long_press;
+static view_cb_t s_on_tap, s_on_long_press, s_on_chart_toggle;
 
 static const lv_font_t *tier_font(tier_t t)
 {
@@ -181,6 +186,71 @@ static void corner_mask(lv_obj_t *parent, int cx, int cy, int start_deg)
     lv_obj_set_style_arc_rounded(a, false, LV_PART_MAIN);
 }
 
+/* How far a column at x (0..TILE_W-1) must stay from the tile's top and
+ * bottom edge, so it stays inside the small rounded corners. */
+static int corner_inset(int x)
+{
+    int d = x < INNER_R ? x : (x >= TILE_W - INNER_R ? TILE_W - 1 - x : INNER_R);
+    if (d >= INNER_R) {
+        return 0;
+    }
+    int dx = INNER_R - d;
+    int dy = 0;
+    while ((dy + 1) * (dy + 1) + dx * dx <= INNER_R * INNER_R) {
+        dy++;
+    }
+    return INNER_R - dy;
+}
+
+/* The chart: one column per sample, oldest at the left; a filled area in the
+ * hue's fill shade with a CHART_LINE_PX line in its line shade on top. A gap
+ * column draws nothing. The line is 3 px, not 2: the contrast rule for the
+ * digits above it caps how bright it can be, so it gains width instead. */
+#define CHART_LINE_PX 3
+
+static void draw_chart(lv_event_t *e)
+{
+    tile_view_t *t = lv_event_get_user_data(e);
+    lv_layer_t *layer = lv_event_get_layer(e);
+    lv_area_t a;
+    lv_obj_get_coords(lv_event_get_target_obj(e), &a);
+    lv_draw_rect_dsc_t fill, line;
+    lv_draw_rect_dsc_init(&fill);
+    fill.bg_color = lv_color_hex(t->chart_fill);
+    lv_draw_rect_dsc_init(&line);
+    line.bg_color = lv_color_hex(t->chart_line);
+    int prev_top = -1;
+    for (int i = 0; i < HIST_LEN; i++) {
+        int x0 = i * TILE_W / HIST_LEN, x1 = (i + 1) * TILE_W / HIST_LEN - 1;
+        int h = t->cols[i];
+        if (h < 0) {
+            prev_top = -1;
+            continue;
+        }
+        int inset = corner_inset(x0) > corner_inset(x1) ? corner_inset(x0) : corner_inset(x1);
+        int bottom = TILE_H - 1 - inset;
+        int top = TILE_H - 1 - h;
+        if (top < inset) {
+            top = inset;
+        }
+        if (top > bottom - 1) {
+            top = bottom - 1;
+        }
+        lv_area_t r = {a.x1 + x0, a.y1 + top, a.x1 + x1, a.y1 + bottom};
+        lv_draw_rect(layer, &fill, &r);
+        /* The line, joined to the previous column's top. */
+        int lt = top, lb = top + CHART_LINE_PX - 1;
+        if (prev_top >= 0) {
+            lt = prev_top < lt ? prev_top : lt;
+            lb = prev_top + CHART_LINE_PX - 1 > lb ? prev_top + CHART_LINE_PX - 1 : lb;
+        }
+        lb = lb > bottom ? bottom : lb;
+        lv_area_t l = {a.x1 + x0, a.y1 + lt, a.x1 + x1, a.y1 + lb};
+        lv_draw_rect(layer, &line, &l);
+        prev_top = top;
+    }
+}
+
 static void build_tile(int i)
 {
     tile_view_t *t = &s_tile[i];
@@ -194,6 +264,13 @@ static void build_tile(int i)
     lv_obj_align(t->fill, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     lv_obj_set_hidden(t->fill, true);
     t->fill_px = -1;
+
+    t->chart = box(t->box, 0, 0, TILE_W, TILE_H);
+    lv_obj_add_event_cb(t->chart, draw_chart, LV_EVENT_DRAW_MAIN, t);
+    lv_obj_set_hidden(t->chart, true);
+    for (int k = 0; k < HIST_LEN; k++) {
+        t->cols[k] = -1;
+    }
 
     t->edge = box(t->box, INNER_R, 0, TILE_W - 2 * INNER_R, EDGE_H);
     paint(t->edge, 0, 0);
@@ -239,6 +316,14 @@ static void build_pages(void)
                     LV_TEXT_ALIGN_RIGHT);
 }
 
+static void on_chart_row(lv_event_t *e)
+{
+    (void)e;
+    if (s_on_chart_toggle) {
+        s_on_chart_toggle();
+    }
+}
+
 static void build_detail(void)
 {
     s_detail = box(s_root, 0, 0, W, W);
@@ -252,6 +337,21 @@ static void build_detail(void)
                            inner / 2 - 8, LV_TEXT_ALIGN_LEFT);
         lv_obj_set_style_text_line_space(s_d_col[i], 4, 0);
     }
+    /* The chart style: a tap here switches it (and stays on this page). */
+    lv_obj_t *row = box(s_detail, x, 300, inner, 52);
+    lv_obj_set_style_border_color(row, lv_color_hex(COLOR_TEXT_MUTED), 0);
+    lv_obj_set_style_border_width(row, 2, 0);
+    lv_obj_set_style_radius(row, 12, 0);
+    lv_obj_set_clickable(row, true);
+    lv_obj_add_event_cb(row, on_chart_row, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_t *name = label(row, &brl_30, COLOR_TEXT_MUTED, 16, 7, 120, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(name, "Charts");
+    s_d_chart_value =
+        label(row, &brl_30, COLOR_TEXT, 120, 7, inner - 136, LV_TEXT_ALIGN_RIGHT);
+    for (int i = 0; i < 2; i++) {
+        lv_obj_set_height(s_d_col[i], 300 - 76 - 8); /* never under the row */
+    }
+
     /* Three lines of Barlow 24, ending above the bottom margin. */
     s_d_footer = label(s_detail, &brl_24, COLOR_TEXT_MUTED, x, 362, inner, LV_TEXT_ALIGN_LEFT);
     lv_obj_set_height(s_d_footer, 3 * (brl_24.line_height + 2));
@@ -269,10 +369,12 @@ static void build_nodata(void)
     s_n_hint = label(s_nodata, &brl_30, COLOR_TEXT, 0, 318, W, LV_TEXT_ALIGN_CENTER);
 }
 
-void view_init(lv_obj_t *screen, view_cb_t on_tap, view_cb_t on_long_press)
+void view_init(lv_obj_t *screen, view_cb_t on_tap, view_cb_t on_long_press,
+               view_cb_t on_chart_toggle)
 {
     s_on_tap = on_tap;
     s_on_long_press = on_long_press;
+    s_on_chart_toggle = on_chart_toggle;
     lv_obj_set_style_bg_color(screen, lv_color_hex(COLOR_GROUND), 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_set_scrollable(screen, false);
@@ -341,7 +443,30 @@ static void set_fill(tile_view_t *t, int px, bool animate)
     t->fill_px = px;
 }
 
-static void render_tile(tile_view_t *t, const tile_t *m, bool same_page)
+/* Show the chart for this tile's metric, or hide it. Invalidates only the
+ * tile, and only when a column changed. */
+static bool render_chart(tile_view_t *t, const tile_t *m, const view_model_t *vm)
+{
+    static int16_t cols[HIST_LEN];
+    bool on = vm->style == CHART_HISTORY && vm->hist_heights != NULL &&
+              m->hist != HIST_NONE && vm->hist_heights(m->hist, vm->frame, TILE_H, cols);
+    lv_obj_set_hidden(t->chart, !on);
+    if (!on) {
+        return false;
+    }
+    const hue_colors_t *c = hue_colors(m->hue);
+    if (memcmp(cols, t->cols, sizeof(cols)) != 0 || c->fill != t->chart_fill ||
+        c->line != t->chart_line) {
+        memcpy(t->cols, cols, sizeof(cols));
+        t->chart_fill = c->fill;
+        t->chart_line = c->line;
+        lv_obj_invalidate(t->chart);
+    }
+    return true;
+}
+
+static void render_tile(tile_view_t *t, const tile_t *m, bool same_page,
+                        const view_model_t *vm)
 {
     if (t->hue != (int)m->hue) {
         const hue_colors_t *c = hue_colors(m->hue);
@@ -359,7 +484,8 @@ static void render_tile(tile_view_t *t, const tile_t *m, bool same_page)
     set_text(t->label, m->label ? m->label : "");
     set_text(t->value, m->value);
     set_text(t->unit, m->unit);
-    int px = m->fill < 0 ? -1 : (int)(m->fill * (float)TILE_H + 0.5f);
+    bool chart = render_chart(t, m, vm);
+    int px = chart || m->fill < 0 ? -1 : (int)(m->fill * (float)TILE_H + 0.5f);
     set_fill(t, px, s_animate && same_page);
 }
 
@@ -378,7 +504,7 @@ static void render_pages(const view_model_t *m)
     }
     bool same_page = s_last_page == (int)m->page;
     for (int i = 0; i < TILES_PER_PAGE; i++) {
-        render_tile(&s_tile[i], &m->tiles[i], same_page);
+        render_tile(&s_tile[i], &m->tiles[i], same_page, m);
     }
     s_last_page = (int)m->page;
 }
@@ -408,6 +534,7 @@ static void render_detail(const view_model_t *m)
              (unsigned long)m->rejected, (unsigned long)m->stack_free_rx,
              (unsigned long)m->stack_free_ui);
     set_text(s_d_footer, line);
+    set_text(s_d_chart_value, chart_style_name(m->style));
     s_last_page = -1;
 }
 
