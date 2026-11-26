@@ -41,3 +41,9 @@ def test_readme_uses_the_same_image_pin() -> None:
     """The README flash commands and the build must use one image."""
     readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
     assert f"export IDF_IMAGE={IDF_IMAGE}" in readme
+
+
+def test_preview_step_renders_into_the_ignored_preview_dir() -> None:
+    assert "make -C test/preview" in COMMANDS["preview"]
+    gitignore = (Path(__file__).parent.parent / ".gitignore").read_text().splitlines()
+    assert "firmware/preview/" in gitignore

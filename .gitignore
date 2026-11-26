@@ -23,3 +23,5 @@ backup/
 
 # Font downloads for scripts/gen_fonts.py
 /.cache/
+firmware/preview/
+firmware/test/preview/build/

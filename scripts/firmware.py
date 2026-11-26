@@ -39,6 +39,13 @@ COMMANDS = {
     "build": "cd firmware && idf.py build",
     "size": "cd firmware && idf.py size",
     "test": "make -C firmware/test",
+    # Host render of the real UI code into firmware/preview/*.png. Needs the
+    # LVGL component and sdkconfig.h, which `idf.py reconfigure` provides.
+    "preview": (
+        "cd firmware && { test -f build/config/sdkconfig.h"
+        " && test -d managed_components/lvgl__lvgl || idf.py reconfigure; }"
+        ' && make -C test/preview -j"$(nproc)"'
+    ),
 }
 
 

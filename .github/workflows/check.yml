@@ -93,6 +93,19 @@ jobs:
         run: uv run --frozen python scripts/firmware.py build
       - name: size
         run: uv run --frozen python scripts/firmware.py size
+      # The UI code, rendered on the host with the same LVGL and config. It
+      # fails when a number's last digit changes column between values.
+      - name: host preview
+        run: uv run --frozen python scripts/firmware.py preview
+      - name: fonts regenerate byte for byte
+        run: uv run --frozen python scripts/gen_fonts.py --check
+      - name: Upload the preview images
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: preview-${{ github.sha }}
+          path: firmware/preview/*.png
+          if-no-files-found: error
+          retention-days: 3
       - name: Upload the firmware images
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
