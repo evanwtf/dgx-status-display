@@ -1,12 +1,17 @@
 # dgx-status: send DGX status frames to the USB AMOLED display.
 #
-# Install (README, "Install the service"):
-#   sudo install -m 644 deploy/dgx-status.service /etc/systemd/system/
+# A template: install renders @USER@ (the account that runs the daemon) and
+# @REPO@ (the absolute path of the checkout). See README, "Install the
+# service":
+#
+#   sed -e "s|@USER@|$USER|g" -e "s|@REPO@|$REPO|g" deploy/dgx-status.service \
+#     | sudo tee /etc/systemd/system/dgx-status.service >/dev/null
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now dgx-status
 #
-# The unit runs the project's own venv. Run `uv sync --frozen` in the checkout
-# first. Change DGX_STATUS_DEVICE, or put it in /etc/default/dgx-status.
+# Run `uv sync --frozen` in the checkout first. The daemon finds the board's
+# /dev/serial/by-id/ port itself. To pin one port, set DGX_STATUS_DEVICE in
+# /etc/default/dgx-status.
 
 [Unit]
 Description=DGX status frames to the USB AMOLED display
@@ -20,7 +25,6 @@ User=@USER@
 # only; the user does not need to be in dialout.
 SupplementaryGroups=dialout
 WorkingDirectory=@REPO@
-Environment=DGX_STATUS_DEVICE=/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00
 Environment=DGX_STATUS_LOG_LEVEL=INFO
 EnvironmentFile=-/etc/default/dgx-status
 ExecStart=@REPO@/.venv/bin/dgx-status
