@@ -28,5 +28,7 @@ char *fmt_load(char *buf, size_t cap, float l1, float l5, float l15);
 char *fmt_uptime(char *buf, size_t cap, double up_s);
 /* Host clock "22:44:57" from epoch seconds plus a UTC offset. */
 char *fmt_clock(char *buf, size_t cap, int64_t t, int32_t tz_s);
+/* Host clock "22:44" (HH:MM). */
+char *fmt_clock_hm(char *buf, size_t cap, int64_t t, int32_t tz_s);
 /* Age: "7s", "2m 13s", "1h 05m", "3d 4h", or "never" for a negative age. */
 char *fmt_age(char *buf, size_t cap, int64_t age_s);

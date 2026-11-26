@@ -118,6 +118,17 @@ char *fmt_clock(char *buf, size_t cap, int64_t t, int32_t tz_s)
     return buf;
 }
 
+char *fmt_clock_hm(char *buf, size_t cap, int64_t t, int32_t tz_s)
+{
+    int64_t day_s = (t + tz_s) % 86400;
+    if (day_s < 0) {
+        day_s += 86400;
+    }
+    snprintf(buf, cap, "%02lld:%02lld", (long long)(day_s / 3600),
+             (long long)((day_s % 3600) / 60));
+    return buf;
+}
+
 char *fmt_age(char *buf, size_t cap, int64_t age_s)
 {
     if (age_s < 0) {

@@ -1,0 +1,82 @@
+/*
+ * The carousel pages as data. Pure C.
+ *
+ * Three pages of four tiles. Each tile has a label, one big value and a
+ * unit. The view draws a tile; this module decides what goes in it.
+ *
+ * Numbers must not move as they tick:
+ *  - each tile has a fixed font tier, sized for its worst-case value;
+ *  - each field has fixed decimal places;
+ *  - the view right-aligns the value against a fixed edge, so the last digit
+ *    keeps its column, and the unit sits in a fixed slot below.
+ * A value too wide for its tier shows an overflow marker (">99"), never a
+ * clipped number.
+ */
+#pragma once
+
+#include <stdbool.h>
+#include <stddef.h>
+
+#include "status.h"
+
+#define PAGE_COUNT 3
+#define TILES_PER_PAGE 4
+#define TILE_VALUE_MAX (STATUS_OCC_MAX + 1)
+#define TILE_UNIT_MAX 24
+
+typedef enum { PAGE_GPU = 0, PAGE_COOLING, PAGE_HOST } page_id_t;
+
+/* Font tiers. Each holds a fixed number of monospace characters. */
+typedef enum {
+    TIER_XL = 0, /* 3 characters, 110 px */
+    TIER_L,      /* 4 characters, 82 px */
+    TIER_M,      /* 5 characters, 66 px; also short lowercase names */
+    TIER_TEXT,   /* 9 characters, 36 px; longer names, cut with "..." */
+} tier_t;
+
+/* Characters each tier holds in a tile. */
+int tier_width(tier_t t);
+
+typedef enum { TONE_NEUTRAL = 0, TONE_AMBER, TONE_RED } tone_t;
+
+typedef enum {
+    METRIC_NONE = 0,
+    METRIC_GPU_C,
+    METRIC_BOARD_C,
+    METRIC_NVME_C,
+} metric_t;
+
+/* The one threshold table: amber at or above `amber`, red at or above `red`. */
+typedef struct {
+    metric_t metric;
+    float amber;
+    float red;
+} threshold_t;
+
+tone_t tone_for(metric_t m, float value);
+
+typedef struct {
+    const char *label;
+    char value[TILE_VALUE_MAX];
+    char unit[TILE_UNIT_MAX];
+    tier_t tier;
+    tone_t tone;
+    bool is_text; /* a name, not a number: left-aligned, may change size */
+} tile_t;
+
+const char *page_name(page_id_t p);
+
+/* Fill the four tiles of page p from frame f. */
+void page_tiles(page_id_t p, const status_frame_t *f, tile_t out[TILES_PER_PAGE]);
+
+/* ---- Value formatters (exported for tests) ---- */
+
+/* v with `decimals` places, at most `width` characters; FMT_DASH when
+ * unknown; an overflow marker (">99", ">999") when too wide. */
+char *fmt_fixed(char *buf, size_t cap, float v, int decimals, int width);
+/* Fan speed in thousands, one decimal, rounded half up on whole RPM:
+ * 2700 -> "2.7", 4050 -> "4.1", 13500 -> "13.5". At most 4 characters. */
+char *fmt_krpm(char *buf, size_t cap, float rpm);
+/* Uptime as its largest whole unit: value "14", unit "days"; "5" "hours";
+ * "42" "min". At most 3 characters. */
+void fmt_uptime_tile(double up_s, char *value, size_t vcap, char *unit, size_t ucap);

@@ -10,10 +10,12 @@
 #include <string.h>
 
 #include "burnin.h"
+#include "carousel.h"
 #include "fmt.h"
 #include "line_reader.h"
 #include "link_state.h"
 #include "status.h"
+#include "tiles.h"
 
 static int g_failed;
 static int g_checks;
@@ -349,6 +351,254 @@ static void test_burnin(void)
     CHECK(BRIGHTNESS_LIVE < 255);
 }
 
+static void test_fmt_fixed(void)
+{
+    char b[32];
+    /* Fixed decimals: never "7" for 7.0, never "7.12" for 7.12. */
+    CHECK_STR(fmt_fixed(b, sizeof(b), 7.0f, 1, 5), "7.0");
+    CHECK_STR(fmt_fixed(b, sizeof(b), 7.12f, 1, 5), "7.1");
+    CHECK_STR(fmt_fixed(b, sizeof(b), 121.94f, 1, 5), "121.9");
+    CHECK_STR(fmt_fixed(b, sizeof(b), 0.35f, 2, 5), "0.35");
+    CHECK_STR(fmt_fixed(b, sizeof(b), 12.345f, 2, 5), "12.35");
+    CHECK_STR(fmt_fixed(b, sizeof(b), 180.4f, 0, 3), "180");
+    CHECK_STR(fmt_fixed(b, sizeof(b), 9.5f, 0, 3), "10");
+    CHECK_STR(fmt_fixed(b, sizeof(b), -0.4f, 0, 3), "0");
+    CHECK_STR(fmt_fixed(b, sizeof(b), -12.0f, 0, 3), "-12");
+    CHECK_STR(fmt_fixed(b, sizeof(b), NAN, 0, 3), FMT_DASH);
+    /* Too wide for the tile: an overflow marker, never a clipped number. */
+    CHECK_STR(fmt_fixed(b, sizeof(b), 1000.0f, 0, 3), ">99");
+    CHECK_STR(fmt_fixed(b, sizeof(b), 1000.0f, 1, 5), ">999");
+    CHECK_STR(fmt_fixed(b, sizeof(b), 100.0f, 2, 5), ">99");
+    CHECK_STR(fmt_fixed(b, sizeof(b), -100.0f, 0, 3), FMT_DASH);
+    CHECK_STR(fmt_clock_hm(b, sizeof(b), 1795664697, -18000), "22:44");
+}
+
+static void test_fmt_krpm(void)
+{
+    char b[16];
+    CHECK_STR(fmt_krpm(b, sizeof(b), 0), "0.0");
+    CHECK_STR(fmt_krpm(b, sizeof(b), 950), "1.0");
+    CHECK_STR(fmt_krpm(b, sizeof(b), 2700), "2.7");
+    CHECK_STR(fmt_krpm(b, sizeof(b), 4050), "4.1"); /* half up */
+    CHECK_STR(fmt_krpm(b, sizeof(b), 4049), "4.0");
+    CHECK_STR(fmt_krpm(b, sizeof(b), 9999), "10.0");
+    CHECK_STR(fmt_krpm(b, sizeof(b), 13500), "13.5");
+    CHECK_STR(fmt_krpm(b, sizeof(b), 99999), ">99"); /* 100.0 is 5 characters */
+    CHECK_STR(fmt_krpm(b, sizeof(b), NAN), FMT_DASH);
+    CHECK_STR(fmt_krpm(b, sizeof(b), -1), FMT_DASH);
+}
+
+static void test_fmt_uptime_tile(void)
+{
+    char v[16], u[16];
+    fmt_uptime_tile(1214815, v, sizeof(v), u, sizeof(u)); /* 14d 1h 26m */
+    CHECK_STR(v, "14");
+    CHECK_STR(u, "days");
+    fmt_uptime_tile(86400, v, sizeof(v), u, sizeof(u));
+    CHECK_STR(v, "1");
+    CHECK_STR(u, "day");
+    fmt_uptime_tile(5 * 3600 + 59 * 60, v, sizeof(v), u, sizeof(u));
+    CHECK_STR(v, "5");
+    CHECK_STR(u, "hours");
+    fmt_uptime_tile(42 * 60 + 5, v, sizeof(v), u, sizeof(u));
+    CHECK_STR(v, "42");
+    CHECK_STR(u, "min");
+    fmt_uptime_tile(1000.0 * 86400, v, sizeof(v), u, sizeof(u));
+    CHECK_STR(v, ">99");
+    fmt_uptime_tile(NAN, v, sizeof(v), u, sizeof(u));
+    CHECK_STR(v, FMT_DASH);
+    CHECK_STR(u, "");
+}
+
+static void test_thresholds(void)
+{
+    CHECK(tone_for(METRIC_GPU_C, 79.9f) == TONE_NEUTRAL);
+    CHECK(tone_for(METRIC_GPU_C, 80.0f) == TONE_AMBER);
+    CHECK(tone_for(METRIC_GPU_C, 89.9f) == TONE_AMBER);
+    CHECK(tone_for(METRIC_GPU_C, 90.0f) == TONE_RED);
+    CHECK(tone_for(METRIC_BOARD_C, 69.9f) == TONE_NEUTRAL);
+    CHECK(tone_for(METRIC_BOARD_C, 70.0f) == TONE_AMBER);
+    CHECK(tone_for(METRIC_BOARD_C, 80.0f) == TONE_RED);
+    CHECK(tone_for(METRIC_NVME_C, 75.0f) == TONE_AMBER);
+    CHECK(tone_for(METRIC_NVME_C, 85.0f) == TONE_RED);
+    CHECK(tone_for(METRIC_NONE, 1000.0f) == TONE_NEUTRAL);
+    CHECK(tone_for(METRIC_GPU_C, NAN) == TONE_NEUTRAL);
+}
+
+static void test_page_tiles_real_frame(void)
+{
+    status_frame_t f;
+    CHECK(parse(REAL, &f) == FRAME_OK);
+    tile_t t[TILES_PER_PAGE];
+
+    page_tiles(PAGE_GPU, &f, t);
+    CHECK_STR(t[0].label, "GPU util");
+    CHECK_STR(t[0].value, "0");
+    CHECK_STR(t[0].unit, "%");
+    CHECK(t[0].tier == TIER_XL);
+    CHECK_STR(t[1].label, "GPU power");
+    CHECK_STR(t[1].value, "4");
+    CHECK_STR(t[1].unit, "W");
+    CHECK_STR(t[2].label, "GPU temp");
+    CHECK_STR(t[2].value, "44");
+    CHECK_STR(t[2].unit, FMT_DEG "C");
+    CHECK(t[2].tone == TONE_NEUTRAL);
+    CHECK_STR(t[3].label, "On GPU");
+    CHECK_STR(t[3].value, "idle");
+    CHECK(t[3].is_text && t[3].tier == TIER_M);
+
+    page_tiles(PAGE_COOLING, &f, t);
+    CHECK_STR(t[0].label, "Fan 0");
+    CHECK_STR(t[0].value, "2.8"); /* 2790 */
+    CHECK_STR(t[0].unit, "kRPM");
+    CHECK(t[0].tier == TIER_L);
+    CHECK_STR(t[1].value, "4.2"); /* 4185 */
+    CHECK_STR(t[2].label, "Board");
+    CHECK_STR(t[2].value, "46"); /* 45.8 */
+    CHECK_STR(t[3].label, "NVMe");
+    CHECK_STR(t[3].value, "45"); /* 44.9 */
+
+    page_tiles(PAGE_HOST, &f, t);
+    CHECK_STR(t[0].label, "CPU");
+    CHECK_STR(t[0].value, "0");
+    CHECK_STR(t[1].label, "Memory");
+    CHECK_STR(t[1].value, "7.2");
+    CHECK_STR(t[1].unit, "/ 122 GiB");
+    CHECK(t[1].tier == TIER_M);
+    CHECK_STR(t[2].label, "Load 1m");
+    CHECK_STR(t[2].value, "0.35");
+    CHECK_STR(t[3].label, "Uptime");
+    CHECK_STR(t[3].value, "14");
+    CHECK_STR(t[3].unit, "days");
+
+    /* Every value fits its tier, for every page. */
+    for (int p = 0; p < PAGE_COUNT; p++) {
+        page_tiles((page_id_t)p, &f, t);
+        for (int i = 0; i < TILES_PER_PAGE; i++) {
+            CHECK(t[i].is_text || (int)strlen(t[i].value) <= tier_width(t[i].tier));
+        }
+    }
+}
+
+static void test_page_tiles_busy_and_missing(void)
+{
+    status_frame_t f;
+    status_frame_clear(&f);
+    f.gpu_pct = 97;
+    f.gpu_w = 180.4f;
+    f.gpu_c = 85;
+    f.fan0_rpm = 9000;
+    f.fan1_rpm = 13500;
+    f.board_c = 81;
+    snprintf(f.occ, sizeof(f.occ), "llama.cpp");
+    tile_t t[TILES_PER_PAGE];
+
+    page_tiles(PAGE_GPU, &f, t);
+    CHECK_STR(t[0].value, "97");
+    CHECK_STR(t[1].value, "180");
+    CHECK_STR(t[2].value, "85");
+    CHECK(t[2].tone == TONE_AMBER);
+    CHECK_STR(t[3].value, "llama.cpp");
+    CHECK(t[3].tier == TIER_TEXT); /* 9 characters: too long for 66 px */
+
+    page_tiles(PAGE_COOLING, &f, t);
+    CHECK_STR(t[0].value, "9.0");
+    CHECK_STR(t[1].value, "13.5");
+    CHECK(t[2].tone == TONE_RED);
+    CHECK_STR(t[3].value, FMT_DASH); /* missing NVMe */
+    CHECK(t[3].tone == TONE_NEUTRAL);
+
+    page_tiles(PAGE_HOST, &f, t);
+    for (int i = 0; i < TILES_PER_PAGE; i++) {
+        CHECK_STR(t[i].value, FMT_DASH);
+    }
+    CHECK_STR(t[1].unit, "/ " FMT_DASH " GiB");
+
+    /* Occupant unknown is a dash, not "idle". */
+    f.occ[0] = '\0';
+    page_tiles(PAGE_GPU, &f, t);
+    CHECK_STR(t[3].value, FMT_DASH);
+    CHECK(!t[3].is_text);
+    /* Upper case does not fit the 66 px glyph set: it goes to 36 px. */
+    snprintf(f.occ, sizeof(f.occ), "vLLM");
+    page_tiles(PAGE_GPU, &f, t);
+    CHECK(t[3].tier == TIER_TEXT);
+    snprintf(f.occ, sizeof(f.occ), "vllm");
+    page_tiles(PAGE_GPU, &f, t);
+    CHECK(t[3].tier == TIER_M);
+}
+
+static void test_carousel(void)
+{
+    carousel_t c;
+    int64_t t0 = 1000;
+    carousel_init(&c, t0);
+    CHECK(carousel_view(&c) == VIEW_NO_DATA); /* nothing received yet */
+    carousel_tick(&c, LINK_LIVE, t0);
+    CHECK(carousel_view(&c) == VIEW_PAGE);
+    CHECK(c.page == PAGE_GPU);
+
+    /* Advance at 10 s, not before. */
+    carousel_tick(&c, LINK_LIVE, t0 + CAROUSEL_PAGE_MS - 1);
+    CHECK(c.page == PAGE_GPU);
+    carousel_tick(&c, LINK_LIVE, t0 + CAROUSEL_PAGE_MS);
+    CHECK(c.page == PAGE_COOLING);
+    int64_t t1 = t0 + CAROUSEL_PAGE_MS;
+
+    /* Tap advances and restarts the timer. */
+    carousel_tap(&c, t1 + 4000);
+    CHECK(c.page == PAGE_HOST);
+    carousel_tick(&c, LINK_LIVE, t1 + 4000 + CAROUSEL_PAGE_MS - 1);
+    CHECK(c.page == PAGE_HOST);
+    carousel_tick(&c, LINK_LIVE, t1 + 4000 + CAROUSEL_PAGE_MS);
+    CHECK(c.page == PAGE_GPU); /* wraps */
+    int64_t t2 = t1 + 4000 + CAROUSEL_PAGE_MS;
+
+    /* STALE keeps cycling. */
+    carousel_tick(&c, LINK_STALE, t2 + CAROUSEL_PAGE_MS);
+    CHECK(c.page == PAGE_COOLING);
+    int64_t t3 = t2 + CAROUSEL_PAGE_MS;
+
+    /* Long press opens detail; the carousel holds still under it. */
+    carousel_long_press(&c, t3 + 1000);
+    CHECK(carousel_view(&c) == VIEW_DETAIL);
+    carousel_tick(&c, LINK_LIVE, t3 + 1000 + CAROUSEL_DETAIL_MS - 1);
+    CHECK(carousel_view(&c) == VIEW_DETAIL);
+    CHECK(c.page == PAGE_COOLING);
+    /* The timeout returns to the same page, with a fresh timer. */
+    int64_t t4 = t3 + 1000 + CAROUSEL_DETAIL_MS;
+    carousel_tick(&c, LINK_LIVE, t4);
+    CHECK(carousel_view(&c) == VIEW_PAGE);
+    CHECK(c.page == PAGE_COOLING);
+    carousel_tick(&c, LINK_LIVE, t4 + CAROUSEL_PAGE_MS - 1);
+    CHECK(c.page == PAGE_COOLING);
+
+    /* A tap closes detail without moving on. */
+    carousel_long_press(&c, t4 + 100);
+    carousel_tap(&c, t4 + 200);
+    CHECK(carousel_view(&c) == VIEW_PAGE);
+    CHECK(c.page == PAGE_COOLING);
+
+    /* NO DATA stops cycling, closes detail and ignores touch. */
+    carousel_long_press(&c, t4 + 300);
+    carousel_tick(&c, LINK_NO_DATA, t4 + 400);
+    CHECK(carousel_view(&c) == VIEW_NO_DATA);
+    carousel_tap(&c, t4 + 500);
+    carousel_long_press(&c, t4 + 600);
+    carousel_tick(&c, LINK_NO_DATA, t4 + 10 * CAROUSEL_PAGE_MS);
+    CHECK(carousel_view(&c) == VIEW_NO_DATA);
+    CHECK(c.page == PAGE_COOLING);
+    /* Frames resume: same page, fresh timer. */
+    int64_t t5 = t4 + 11 * CAROUSEL_PAGE_MS;
+    carousel_tick(&c, LINK_LIVE, t5);
+    CHECK(carousel_view(&c) == VIEW_PAGE);
+    CHECK(c.page == PAGE_COOLING);
+    carousel_tick(&c, LINK_LIVE, t5 + CAROUSEL_PAGE_MS - 1);
+    CHECK(c.page == PAGE_COOLING);
+    carousel_tick(&c, LINK_LIVE, t5 + CAROUSEL_PAGE_MS);
+    CHECK(c.page == PAGE_HOST);
+}
+
 int main(void)
 {
     test_parse_real_frame();
@@ -363,6 +613,13 @@ int main(void)
     test_link_state();
     test_fmt();
     test_burnin();
+    test_fmt_fixed();
+    test_fmt_krpm();
+    test_fmt_uptime_tile();
+    test_thresholds();
+    test_page_tiles_real_frame();
+    test_page_tiles_busy_and_missing();
+    test_carousel();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }
