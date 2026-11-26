@@ -61,3 +61,10 @@ Dependencies (fetched at build time, not included here)
   Converted with lv_font_conv 1.5.3 (MIT). scripts/gen_fonts.py regenerates
   them byte for byte. The OFL allows embedding the font in software; the
   bitmaps are a subset of the glyphs and carry no Reserved Font Name.
+
+- firmware/main/fonts/brl_*.c: bitmap fonts generated from Barlow Semi
+  Condensed Medium, version 1.422, SIL Open Font License 1.1, Copyright 2017
+  The Barlow Project Authors (https://github.com/jpt/barlow).
+  Source: https://raw.githubusercontent.com/jpt/barlow/697600fcece1685b0ba409eb82868546def9a84e/fonts/ttf/BarlowSemiCondensed-Medium.ttf
+  (tag 1.422; sha256 ef5c39de3ac1764a24c7495098672ccc034e39679ccd65d76eed752da59e11e1).
+  Converted with lv_font_conv 1.5.3 by scripts/gen_fonts.py.

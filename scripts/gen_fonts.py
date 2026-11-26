@@ -6,7 +6,10 @@
 Inputs, each pinned by hash:
 - JetBrains Mono v2.304 (OFL-1.1), the official release zip from
   github.com/JetBrains/JetBrainsMono. The SemiBold weight: thick enough to
-  read across a room on black, still open at 36 px.
+  read across a room on black, still open at 36 px. Every value.
+- Barlow Semi Condensed Medium 1.422 (OFL-1.1), from github.com/jpt/barlow at
+  the tag's commit (the release has no assets). Labels, units, titles and
+  the clock: condensed, so words fit in 220 px tiles.
 - lv_font_conv 1.5.3 (MIT), LVGL's font converter, the npm tarball. Its
   dependencies are bundled in the tarball, so nothing else is fetched.
 - node:22.22-alpine, pinned by digest, runs the converter. Nothing is
@@ -47,6 +50,14 @@ FONT_MEMBER = "fonts/ttf/JetBrainsMono-SemiBold.ttf"
 FONT_FILE = "JetBrainsMono-SemiBold.ttf"
 FONT_SHA256 = "1b3bfa1ed5665a4ce3f9feb68d2d4e40e70bf8b4b7d9a3edd418f321b4e166a0"
 
+# Tag 1.422 of jpt/barlow is commit 697600fc.
+BARLOW_URL = (
+    "https://raw.githubusercontent.com/jpt/barlow/"
+    "697600fcece1685b0ba409eb82868546def9a84e/fonts/ttf/BarlowSemiCondensed-Medium.ttf"
+)
+BARLOW_FILE = "BarlowSemiCondensed-Medium.ttf"
+BARLOW_SHA256 = "ef5c39de3ac1764a24c7495098672ccc034e39679ccd65d76eed752da59e11e1"
+
 CONV_URL = "https://registry.npmjs.org/lv_font_conv/-/lv_font_conv-1.5.3.tgz"
 CONV_SHA256 = "9f64fb8eb553dbab1990402eae74afbafd80b4f39a8314a01484083b6ed1000d"
 # The npm registry's own integrity record for this version.
@@ -61,6 +72,7 @@ NODE_IMAGE = (
 )
 
 EM_DASH = "0x2014"
+DEGREE = "0xB0"
 DIGITS = "0123456789"
 LOWER = "abcdefghijklmnopqrstuvwxyz"
 
@@ -73,11 +85,16 @@ class FontSpec:
     size: int
     symbols: str = ""
     ranges: tuple[str, ...] = ()
+    font: str = FONT_FILE
+
+    @property
+    def monospace(self) -> bool:
+        return self.font == FONT_FILE
 
     def argv(self) -> list[str]:
         args = [
             "--font",
-            FONT_FILE,
+            self.font,
             "--size",
             str(self.size),
             "--bpp",
@@ -110,6 +127,13 @@ FONTS: tuple[FontSpec, ...] = (
     FontSpec("jbm_mix_66", 66, symbols=DIGITS + ".->_+" + LOWER, ranges=(EM_DASH,)),
     # Longer GPU occupant names: 9 characters ("llama.cpp").
     FontSpec("jbm_text_36", 36, ranges=("0x20-0x7E", EM_DASH)),
+    # Barlow: the words around the values.
+    FontSpec("brl_24", 24, ranges=("0x20-0x7E", DEGREE, EM_DASH), font=BARLOW_FILE),
+    FontSpec("brl_30", 30, ranges=("0x20-0x7E", DEGREE, EM_DASH), font=BARLOW_FILE),
+    # Page titles only.
+    FontSpec("brl_32", 32, symbols="GPUCoolingHstAl temprau", font=BARLOW_FILE),
+    # The NO DATA headline only.
+    FontSpec("brl_44", 44, symbols="No data from the DGX", font=BARLOW_FILE),
 )
 
 
@@ -145,6 +169,7 @@ def prepare(cache: Path) -> None:
         (cache / FONT_FILE).write_bytes(z.read(FONT_MEMBER))
     if sha256(cache / FONT_FILE) != FONT_SHA256:
         raise SystemExit(f"{FONT_FILE}: unexpected sha256")
+    fetch(BARLOW_URL, cache / BARLOW_FILE, BARLOW_SHA256)
 
     tgz = cache / "lv_font_conv-1.5.3.tgz"
     fetch(CONV_URL, tgz, CONV_SHA256)
