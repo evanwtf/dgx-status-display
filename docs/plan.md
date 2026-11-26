@@ -53,7 +53,7 @@ is off. It then shows "DGX not sending" with an age, which is the real state.
   `--target host:port` override.
 - Trust: the LAN is trusted, but a frame should not be forgeable by any host
   on it. Add an HMAC-SHA256 over the line with a shared key (key in NVS on
-  the board, in 1Password on the host). The frame gets a `mac` field; v
+  the board, in the password manager on the host). The frame gets a `mac` field; v
   stays 1, because an old reader ignores unknown keys. Reject a frame whose
   `t` is older than the last accepted one, to stop replays.
 - USB serial stays as a fallback and for provisioning.
@@ -72,9 +72,9 @@ the DGX is off.
   Assistant REST API (`/api/states/<sensor entity>`) once a second and sends
   it to the board in its own frame (`{"v":1,"t":...,"host":"ha","outlet_w":...}`).
   The board keeps one state per `host`.
-- The Home Assistant long-lived access token lives in 1Password, vault
-  "redacted", item `redacted`. The service reads it at
-  start with `op read`. It never goes in the repo, a unit file or a log.
+- The Home Assistant long-lived access token lives in the password manager.
+  The service reads it at start. It never goes in the repo, a unit file or
+  a log.
   Set `httpx` and `httpcore` loggers to WARNING so the request URL and
   headers never reach a log.
 - The overview shows `Outlet 212 W` next to `GPU 81 W`. With the DGX off,

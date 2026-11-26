@@ -75,10 +75,18 @@ After that, open one batched pull request per session.
 
 ## Secrets
 
-Phase 1 has no secrets. Phase 2 adds a Home Assistant token: it lives in
-1Password, vault "redacted" (`redacted`), item
-`redacted`, read at run time with `op read`. Never commit
-it. `.env.example` lists every variable with no real value.
+Phase 1 has no secrets. Phase 2 adds a Home Assistant token. It lives in a
+password manager and is read at run time. Never commit it, and never name
+its vault or item here. `.env.example` lists every variable with no real
+value.
+
+## Public repository
+
+This repository is public. No tracked file may name a host, a private DNS
+name, a LAN address (`10.x` is allowed), a home-directory path, a board's
+serial number or MAC, or a secret's storage location. Describe a machine by
+its role. `tests/test_public_guard.py` enforces this and reports `file:line`
+only.
 
 ## Before doing this, read
 
