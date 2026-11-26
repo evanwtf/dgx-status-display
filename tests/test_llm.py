@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import http.server
+import threading
+import urllib.error
 from pathlib import Path
 
 import pytest
 
 from dgx_status.llm import (
+    FAIL_LOG_EVERY_S,
+    FETCH_TIMEOUT_S,
+    STALE_AFTER_S,
+    Engine,
     LlmPoller,
     LlmReading,
     Step,
     StepRate,
     StepRatio,
+    check_url,
+    http_fetch,
     parse_prometheus,
     reduce,
 )
@@ -50,38 +59,52 @@ def test_parser_skips_malformed_lines(line: str) -> None:
     assert len(parse_prometheus(line)) == 0
 
 
+def _one(name: str) -> Engine:
+    engines = reduce(parse_prometheus(_text(name)))
+    assert len(engines) == 1
+    return next(iter(engines.values()))
+
+
 def test_reduce_sglang_fixture() -> None:
-    e = reduce(parse_prometheus(_text("sglang.txt")))
-    assert e.engines_up == 1
-    assert e.models == ["MiMo-v2.6-Flash"]
+    e = _one("sglang.txt")
+    assert (e.name, e.model) == ("sglang", "MiMo-v2.6-Flash")
     assert sum(e.decode.values()) == 156755
     assert sum(e.prefill.values()) == 971400
-    assert e.requests == 1
-    assert e.kv_ratio == pytest.approx(0.14)
+    assert sum(e.running.values()) == 1 and e.busy
+    assert list(e.kv.values()) == [pytest.approx(0.14)]
     assert sum(e.ttft_count.values()) == 183
     assert sum(e.ttft_sum.values()) == pytest.approx(854.3810183340029)
 
 
 def test_reduce_llamacpp_busy_and_down() -> None:
-    e = reduce(parse_prometheus(_text("llamacpp-busy.txt")))
-    assert e.engines_up == 1 and e.models == ["smollm2-135m"]
+    e = _one("llamacpp-busy.txt")
+    assert (e.name, e.model) == ("llamacpp", "smollm2-135m")
     assert sum(e.decode.values()) == 224 and sum(e.prefill.values()) == 278
-    assert e.kv_ratio is None  # llama.cpp does not export it: unknown, not 0
-    down = reduce(parse_prometheus(_text("llamacpp-down.txt")))
-    assert down.engines_up == 0 and down.decode == {} and down.requests is None
+    assert sum(e.decode_s.values()) == pytest.approx(0.434104)
+    assert e.kv == {}  # llama.cpp does not export it: unknown, not 0
+    assert not e.busy  # requests_running is 0
+    assert reduce(parse_prometheus(_text("llamacpp-down.txt"))) == {}
+
+
+UP = 'llme_engine_up{engine="a",model="%s",backend="%s",host="h",nodes="1"} %d\n'
+RUN = (
+    'llme_requests_running{engine="a",model="%s",backend="%s",host="h",nodes="1",'
+    'worker="default"} %d\n'
+)
 
 
 def test_series_of_down_engines_are_ignored() -> None:
-    text = (
-        'llme_engine_up{engine="a",model="m1",backend="b",host="h",nodes="1"} 1\n'
-        'llme_engine_up{engine="a",model="m2",backend="c",host="h",nodes="1"} 0\n'
-        'llme_requests_running{engine="a",model="m1",backend="b",host="h",nodes="1",'
-        'worker="default"} 2\n'
-        'llme_requests_running{engine="a",model="m2",backend="c",host="h",nodes="1",'
-        'worker="default"} 9\n'
-    )
-    e = reduce(parse_prometheus(text))
-    assert e.engines_up == 1 and e.models == ["m1"] and e.requests == 2
+    text = UP % ("m1", "b", 1) + UP % ("m2", "c", 0) + RUN % ("m1", "b", 2)
+    text += RUN % ("m2", "c", 9)
+    engines = reduce(parse_prometheus(text))
+    assert [e.model for e in engines.values()] == ["m1"]
+    assert sum(next(iter(engines.values())).running.values()) == 2
+
+
+def test_a_duplicated_series_counts_once() -> None:
+    text = UP % ("m1", "b", 1) + RUN % ("m1", "b", 2) + RUN % ("m1", "b", 2)
+    e = next(iter(reduce(parse_prometheus(text)).values()))
+    assert sum(e.running.values()) == 2
 
 
 def test_step_rate_on_a_per_iteration_engine() -> None:
@@ -154,8 +177,8 @@ def test_poller_states() -> None:
     fetch = Fetcher(None)
     p = LlmPoller("http://127.0.0.1:1/metrics", fetch=fetch, clock=clock)
     p.poll()
-    assert p.reading() is None  # unreachable: dashes
-    assert fetch.timeouts == [0.3]
+    assert p.reading() is None  # never read: unknown
+    assert fetch.timeouts == [FETCH_TIMEOUT_S]
 
     fetch.body = _text("llamacpp-down.txt")
     p.poll()
@@ -169,14 +192,40 @@ def test_poller_states() -> None:
     assert r.out_tps == 0.0 and r.in_tps == 0.0 and r.requests == 0  # real zeros
     assert r.kv_pct is None
 
-    fetch.body = "<html>not metrics</html>"
-    clock.now += 1
+
+def test_a_failed_poll_keeps_the_reading_until_stale() -> None:
+    clock = Clock()
+    fetch = Fetcher(_text("sglang.txt"))
+    p = LlmPoller(fetch=fetch, clock=clock)
     p.poll()
-    assert p.reading() is None  # bad answer: dashes
+    first = p.reading()
+    assert first is not None and first.kv_pct == pytest.approx(14.0)
+    for body in (None, "<html>not metrics</html>"):
+        fetch.body = body
+        clock.now += 5.0
+        p.poll()
+        assert p.reading() == first  # kept: not wiped by one bad poll
+    clock.now += STALE_AFTER_S - 10.0 + 0.1
+    assert p.reading() is None  # older than STALE_AFTER_S
+
+
+def test_failures_log_one_warning_per_minute(caplog: pytest.LogCaptureFixture) -> None:
+    clock = Clock()
+    p = LlmPoller(fetch=Fetcher(None), clock=clock)
+    with caplog.at_level("WARNING"):
+        for _ in range(30):
+            p.poll()
+            clock.now += 1.0
+        assert len(caplog.records) == 1
+        clock.now += FAIL_LOG_EVERY_S
+        p.poll()
+    assert len(caplog.records) == 2
+    assert "30 failed polls" in caplog.records[1].getMessage()
 
 
 def test_poller_rates_from_two_real_expositions() -> None:
-    """Idle, then four requests later: 224 decode and 278 prefill tokens."""
+    """llama.cpp, idle then four finished requests: 224 decode tokens in
+    0.434104 s of generation, 278 prefill tokens."""
     clock = Clock()
     fetch = Fetcher(_text("llamacpp-idle.txt"))
     p = LlmPoller(fetch=fetch, clock=clock)
@@ -186,23 +235,160 @@ def test_poller_rates_from_two_real_expositions() -> None:
     p.poll()
     r = p.reading()
     assert r is not None
-    assert r.out_tps == pytest.approx(112.0)
+    assert r.out_tps == pytest.approx(224 / 0.434104)  # the requests' own speed
     assert r.in_tps == pytest.approx(139.0)
     assert r.models == "smollm2-135m"
 
 
-def test_poller_reading_goes_stale() -> None:
+def _expo(
+    engine: str,
+    decode: float,
+    running: int | None,
+    decode_s: float | None = None,
+    model: str = "m",
+) -> str:
+    lab = f'engine="{engine}",model="{model}",backend="b",host="h",nodes="1"'
+    w = lab + ',worker="default"'
+    text = f"llme_engine_up{{{lab}}} 1\n"
+    text += f'llme_tokens_total{{{w},phase="decode"}} {decode}\n'
+    if running is not None:
+        text += f"llme_requests_running{{{w}}} {running}\n"
+    if decode_s is not None:
+        text += f'llme_request_phase_seconds_total{{{w},phase="decode"}} {decode_s}\n'
+    return text
+
+
+def test_idle_to_busy_on_a_per_step_engine() -> None:
+    """vLLM-like: 20 s idle, then 100 tok/s. The idle time is not averaged in."""
     clock = Clock()
-    p = LlmPoller(fetch=Fetcher(_text("sglang.txt")), clock=clock)
+    fetch = Fetcher(_expo("vllm", 5000, 0))
+    p = LlmPoller(fetch=fetch, clock=clock)
+    for _ in range(20):
+        p.poll()
+        r = p.reading()
+        assert r is not None and r.out_tps == 0.0
+        clock.now += 1.0
+    tokens = 5000
+    for _ in range(5):
+        tokens += 100
+        fetch.body = _expo("vllm", tokens, 1)
+        p.poll()
+        r = p.reading()
+        assert r is not None and r.out_tps == pytest.approx(100.0)
+        clock.now += 1.0
+    fetch.body = _expo("vllm", tokens, 0)
     p.poll()
     r = p.reading()
-    assert r is not None and r.kv_pct == pytest.approx(14.0) and r.requests == 1
-    clock.now += 3.5
-    assert p.reading() is None
+    assert r is not None and r.out_tps == 0.0
 
 
-def test_http_fetch_refuses_other_schemes() -> None:
-    from dgx_status.llm import http_fetch
+def test_one_short_request_a_minute_on_a_finish_updated_engine() -> None:
+    """llama.cpp-like: tokens move when the request ends. A 5 s request of
+    500 tokens every 60 s shows 100 tok/s, its own speed, each time."""
+    clock = Clock()
+    tokens, seconds = 0, 0.0
+    fetch = Fetcher(_expo("llamacpp", tokens, 0, seconds))
+    p = LlmPoller(fetch=fetch, clock=clock)
+    seen: list[float | None] = []
+    for minute in range(3):
+        for sec in range(60):
+            if sec < 5:  # the request runs; the counters wait for its end
+                fetch.body = _expo("llamacpp", tokens, 1, seconds)
+            elif sec == 5:
+                tokens += 500
+                seconds += 5.0
+                fetch.body = _expo("llamacpp", tokens, 0, seconds)
+            else:
+                fetch.body = _expo("llamacpp", tokens, 0, seconds)
+            p.poll()
+            r = p.reading()
+            assert r is not None
+            if sec == 5:
+                seen.append(r.out_tps)
+            elif sec > 5:
+                assert r.out_tps == 0.0  # idle: a real zero
+            elif minute > 0 and sec > 0:
+                # Running, counter not moved: the last request's speed holds.
+                assert r.out_tps == pytest.approx(100.0)
+            clock.now += 1.0
+    assert seen == [pytest.approx(100.0)] * 3
 
-    with pytest.raises(ValueError):
-        http_fetch("file:///etc/passwd", 0.3)
+
+def test_mixed_engines_sum_their_own_rates() -> None:
+    clock = Clock()
+    v0, l0 = _expo("vllm", 0, 1, model="a"), _expo("llamacpp", 0, 1, 0.0, "b")
+    fetch = Fetcher(v0 + l0)
+    p = LlmPoller(fetch=fetch, clock=clock)
+    p.poll()
+    clock.now += 1.0
+    # vLLM made 40 tokens in this second; llama.cpp finished 300 tokens
+    # generated in 6 s of its own (not a 300 tok/s spike over 1 s).
+    fetch.body = _expo("vllm", 40, 1, model="a") + _expo("llamacpp", 300, 1, 6.0, "b")
+    p.poll()
+    r = p.reading()
+    assert r is not None and r.engines_up == 2 and r.requests == 2
+    assert r.out_tps == pytest.approx(40.0 + 50.0)
+    assert r.models == "a, b"
+
+
+def test_ttft_and_acceptance_expire() -> None:
+    q = StepRatio(max_age_s=30.0)
+    q.update(Step(0, {"s": 0.0}), Step(0, {"c": 0}))
+    assert q.update(Step(1, {"s": 0.5}), Step(1, {"c": 1})) == pytest.approx(0.5)
+    assert q.update(Step(31, {"s": 0.5}), Step(31, {"c": 1})) == pytest.approx(0.5)
+    assert q.update(Step(31.5, {"s": 0.5}), Step(31.5, {"c": 1})) is None
+
+
+@pytest.mark.parametrize(
+    ("url", "ok"),
+    [
+        ("http://127.0.0.1:9109/metrics", True),
+        ("http://127.5.6.7:9109/metrics", True),
+        ("http://[::1]:9109/metrics", True),
+        ("http://localhost:9109/metrics", True),
+        ("https://localhost/metrics", True),
+        ("http://10.0.0.5:9109/metrics", False),
+        ("http://example.com/metrics", False),
+        ("http://127.0.0.1.example.com/metrics", False),
+        ("file:///etc/passwd", False),
+        ("ftp://127.0.0.1/x", False),
+    ],
+)
+def test_only_loopback_http_urls(url: str, ok: bool) -> None:
+    assert (check_url(url) is None) == ok
+    if not ok:
+        with pytest.raises(ValueError):
+            http_fetch(url, 0.3)
+
+
+class _Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", "http://127.0.0.1:1/metrics")
+            self.end_headers()
+            return
+        body = b'llme_engine_up{engine="a"} 0\n'
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+def test_http_fetch_ignores_proxies_and_redirects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+        assert "llme_engine_up" in http_fetch(base + "/metrics", 2.0)
+        with pytest.raises(urllib.error.HTTPError):
+            http_fetch(base + "/redirect", 2.0)
+    finally:
+        server.shutdown()

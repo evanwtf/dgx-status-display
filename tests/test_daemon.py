@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from dgx_status.collector import Collector
 from dgx_status.daemon import run
+from dgx_status.frame import Snapshot
 from dgx_status.gpu import GpuReading
 
 
@@ -78,3 +81,25 @@ def test_a_late_tick_is_skipped_not_burst(dgx_root: Path) -> None:
     # Tick 1 sleeps, stalls 5 s. Tick 2 goes out at once (it is late). Tick 3
     # waits a full interval: the four missed ticks are not sent in a burst.
     assert t.sleeps == [1.0, 1.0]
+
+
+def test_a_failing_frame_is_skipped_not_fatal(
+    dgx_root: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    t = Time()
+    c = _collector(dgx_root, t)
+    calls = {"n": 0}
+    real = c.snapshot
+
+    def flaky() -> Snapshot:
+        calls["n"] += 1
+        if calls["n"] in (2, 3):  # the priming read is call 1
+            raise ValueError("bad reading")
+        return real()
+
+    c.snapshot = flaky  # type: ignore[method-assign]
+    sink = Sink()
+    with caplog.at_level("ERROR"):
+        delivered = run(c, sink, 1.0, 4, clock=t.clock, sleep=t.sleep)
+    assert delivered == 2 and len(sink.lines) == 2
+    assert caplog.text.count("frame skipped: bad reading") == 2

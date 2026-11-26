@@ -20,7 +20,7 @@ from dgx_status.collector import Collector, Sources
 from dgx_status.daemon import LogSink, Sink, run
 from dgx_status.gpu import NvmlGpu
 from dgx_status.llm import DEFAULT_URL as LLM_DEFAULT_URL
-from dgx_status.llm import LlmPoller, LlmReading
+from dgx_status.llm import LlmPoller, LlmReading, check_url
 from dgx_status.serial_link import DEFAULT_DEVICE_GLOB, SerialLink, open_port
 
 logger = logging.getLogger(__name__)
@@ -46,13 +46,19 @@ def _names(value: str | None) -> tuple[str, ...] | None:
 def llm_source(env: Mapping[str, str]) -> Callable[[], LlmReading | None]:
     """Start the LLM exporter poller, or report idle when the URL is `off`.
 
-    `off` sends llm_up 0, so the board hides the LLM page rather than
-    showing dashes for an exporter that is not meant to be there.
+    `off` sends llm_up 0. A URL that is not http(s) on loopback is refused
+    at start: the LLM fields stay unknown, so the board hides the page.
     """
-    url = env.get(ENV_LLM_URL) or LLM_DEFAULT_URL
-    if url.strip().lower() == "off":
+    url = (env.get(ENV_LLM_URL) or LLM_DEFAULT_URL).strip()
+    if url.lower() == "off":
         idle = LlmReading(engines_up=0)
         return lambda: idle
+    why = check_url(url)
+    if why is not None:
+        logger.error(
+            "%s=%s refused: %s; the LLM page stays hidden", ENV_LLM_URL, url, why
+        )
+        return lambda: None
     poller = LlmPoller(url)
     poller.start()
     return poller.reading

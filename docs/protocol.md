@@ -81,21 +81,34 @@ An environment variable can replace each automatic choice: see the README.
 
 ### LLM rates
 
-The daemon polls the exporter about once a second on its own thread, with
-a 300 ms timeout, so a slow exporter never delays a frame. A poll older than
-3 s is not used. The exporter re-reads each engine on every poll, but the
-engines' counters move at different times (the exporter's
-`docs/adapters.md`): vLLM each scheduler step, SGLang on a timer, llama.cpp
-and TensorFold when a request finishes. A 1-second delta of a counter that
-moves every few seconds flips between 0 and a spike. So `llm_out_tps` and
-`llm_in_tps` are the counter delta over one exporter update step: from the
-previous poll at which the counter changed to this one. That is one update,
-not an average across updates. Between changes the last step's rate holds
-while requests are running; with none running it is 0. A step longer than
-30 s, a counter that goes down, or a new or vanished series makes the rate
-unknown for that poll.
+The daemon polls the exporter on its own thread: one fetch, with a 10 s
+timeout, then a 1 s gap, then the next. The exporter reads every engine
+inside its own scrape, so one fetch can take seconds. A frame never waits;
+it takes the newest reading. A failed fetch keeps the last reading and the
+rate state. A reading older than 15 s is not used.
 
-`llm_up` is present only when the exporter answered with `llme_engine_up`.
+Rates are computed per engine, then summed. The engines' counters move at
+different times (the exporter's `docs/adapters.md`):
+
+- vLLM moves on each scheduler step and SGLang on a timer. The rate is the
+  counter delta over one exporter update step: from the poll at which the
+  counter last changed to this one. That is one update, not an average.
+  While no request runs, the base follows each poll, so idle time never
+  dilutes the first busy step.
+- llama.cpp and TensorFold move decode tokens only when a request finishes.
+  Their `llm_out_tps` is the decode-token delta over the delta of
+  `llme_request_phase_seconds_total{phase="decode"}`: the requests' own
+  generation time. For one request at a time that is its speed; for
+  overlapping requests it is the speed per stream.
+
+While requests run and a counter has not moved yet, the last measured rate
+shows. With none running it is 0. A step longer than 30 s, a counter that
+goes down, or a new or vanished series makes the rate unknown. TTFT and
+draft acceptance expire 30 s after their last change.
+
+`llm_up` is present only when the exporter answered with `llme_engine_up`
+in the last 15 s. The board shows the LLM page only when `llm_up` is 1 or
+more: a missing `llm_up` hides it, as 0 does.
 With `llm_up` 0, no other `llm_*` field is sent. With `llm_up` above 0 and
 no requests, the rates and `llm_req` are real zeros.
 

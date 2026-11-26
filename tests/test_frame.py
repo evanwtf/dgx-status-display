@@ -157,10 +157,10 @@ def test_non_ascii_host_is_escaped() -> None:
     assert line.isascii()
 
 
-@pytest.mark.parametrize("bad", ["a\nb", 'a"b'])
-def test_control_and_quote_characters_stay_inside_json(bad: str) -> None:
+@pytest.mark.parametrize(("bad", "sent"), [("a\nb", "ab"), ('a"b', 'a"b')])
+def test_control_characters_dropped_quotes_kept(bad: str, sent: str) -> None:
     f = _decode(encode_frame(Snapshot(t=1, host=bad)))
-    assert f["host"] == bad
+    assert f["host"] == sent
 
 
 def test_absurd_tz_offset_is_omitted() -> None:
@@ -288,3 +288,62 @@ def test_llm_fields() -> None:
     s.llm_out_tps = -1.0
     f = _decode(encode_frame(s))
     assert "llm_kv_pct" not in f and "llm_out_tps" not in f
+
+
+UGLY = [
+    "\U0001f525" * 40,  # emoji: two \\uXXXX escapes each
+    "中文模型名称" * 20,  # CJK: one \\uXXXX escape each
+    "a\x00b\x1bc\nd\x7f" * 30,  # control characters
+    'q"uote\\back' * 20,
+]
+
+
+@pytest.mark.parametrize("text", UGLY)
+def test_unicode_and_control_strings_fit_at_the_worst_case(text: str) -> None:
+    s = _worst()
+    s.host = text
+    s.occ = text
+    s.llm_model = text
+    s.temps = [(text, 99.9)] * 24
+    line = encode_frame(s)
+    assert len(line) <= MAX_LINE_BYTES
+    f = _decode(line)
+    # Each string fits the board's buffer as decoded UTF-8.
+    for key, cap in (("host", 32), ("occ", 48), ("llm_model", 48)):
+        if key in f:
+            value = f[key]
+            assert isinstance(value, str)
+            assert len(value.encode()) <= cap
+            assert not any(ord(c) < 0x20 or ord(c) == 0x7F for c in value)
+    assert f["host"]
+    th = f.get("th", [])
+    assert isinstance(th, list)
+    for label, _ in th:
+        assert len(label.encode()) <= 15
+
+
+def test_clip_counts_escaped_width() -> None:
+    from dgx_status.frame import clip
+
+    assert clip("abc", 2) == "ab"
+    assert clip("中文", 6) == "中"  # \\u4e2d is 6 wide
+    assert clip("\U0001f525x", 11) == ""  # the emoji is 12 wide
+    assert clip("\U0001f525x", 13) == "\U0001f525x"
+    assert clip("a\tb", 5) == "ab"
+    assert clip("", 5) == ""
+
+
+def test_model_then_occ_go_when_still_over() -> None:
+    s = _worst()
+    s.temps = []
+    s.host = "\U0001f525" * 2  # 24 escaped characters
+    line = encode_frame(s)
+    assert len(line) <= MAX_LINE_BYTES
+
+
+def test_link_speed_over_the_cap_is_left_out() -> None:
+    s = _full()
+    s.lan_mbps = 10**7 + 1
+    assert "lan_mbps" not in _decode(encode_frame(s))
+    s.lan_mbps = 10**7
+    assert _decode(encode_frame(s))["lan_mbps"] == 10**7

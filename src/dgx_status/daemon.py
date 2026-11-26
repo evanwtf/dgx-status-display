@@ -51,6 +51,7 @@ def run(
     collector.snapshot()  # prime the /proc/stat sample
     delivered = 0
     sent = 0
+    failed = False  # the first failure logs its traceback
     next_tick = clock() + interval
     while count is None or sent < count:
         delay = next_tick - clock()
@@ -59,9 +60,15 @@ def run(
         elif -delay > interval:
             next_tick = clock()
         next_tick += interval
-        line = encode_frame(collector.snapshot())
+        sent += 1
+        try:
+            line = encode_frame(collector.snapshot())
+        except Exception as exc:  # one bad reading must not stop the board
+            logger.error("frame skipped: %s", exc, exc_info=not failed)
+            failed = True
+            sink.poll()
+            continue
         if sink.send(line):
             delivered += 1
-        sent += 1
         sink.poll()
     return delivered

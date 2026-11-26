@@ -22,6 +22,7 @@ MAX_TPS = 10**7
 MAX_TZ_S = 14 * 3600
 # Above any real link or disk (10 Tb/s, 10 TB/s): a larger rate is a bug.
 MAX_RATE = 10**13
+MAX_LINK_MBPS = 10**7
 
 
 @dataclass
@@ -95,7 +96,7 @@ def _fields(s: Snapshot) -> dict[str, Any]:
     f: dict[str, Any] = {
         "v": PROTOCOL_VERSION,
         "t": int(s.t),
-        "host": s.host[:MAX_HOST_CHARS],
+        "host": clip(s.host, MAX_HOST_CHARS) or "?",
     }
     if s.tz_s is not None and abs(s.tz_s) <= MAX_TZ_S:
         f["tz_s"] = int(s.tz_s)
@@ -108,7 +109,7 @@ def _fields(s: Snapshot) -> dict[str, Any]:
     f["gpu_pct"] = _int(s.gpu_pct)
     f["gpu_w"] = _int(s.gpu_w)
     f["gpu_c"] = _int(s.gpu_c)
-    f["occ"] = s.occ[:MAX_OCC_CHARS] if s.occ is not None else None
+    f["occ"] = clip(s.occ, MAX_OCC_CHARS) if s.occ is not None else None
     for name in ("fan0", "fan1"):
         f[f"{name}_rpm"] = s.fans.get(name)
     f["board_c"] = _num(s.board_c, 1)
@@ -116,7 +117,11 @@ def _fields(s: Snapshot) -> dict[str, Any]:
     f["nic_c"] = _num(s.nic_c, 1)
     f["lan_rx_bps"] = _rate(s.lan_rx_bps)
     f["lan_tx_bps"] = _rate(s.lan_tx_bps)
-    f["lan_mbps"] = s.lan_mbps if s.lan_mbps is not None and s.lan_mbps > 0 else None
+    f["lan_mbps"] = (
+        s.lan_mbps
+        if s.lan_mbps is not None and 0 < s.lan_mbps <= MAX_LINK_MBPS
+        else None
+    )
     f["roce_rx_bps"] = _rate(s.roce_rx_bps)
     f["roce_tx_bps"] = _rate(s.roce_tx_bps)
     f["cip_bps"] = _rate(s.cip_bps)
@@ -132,16 +137,37 @@ def _fields(s: Snapshot) -> dict[str, Any]:
     if s.llm_up is not None and 0 <= s.llm_up <= 1000:
         f["llm_up"] = int(s.llm_up)
         if s.llm_model:
-            f["llm_model"] = s.llm_model[:MAX_MODEL_CHARS]
+            f["llm_model"] = clip(s.llm_model, MAX_MODEL_CHARS) or None
         f["llm_out_tps"] = _bounded(_num(s.llm_out_tps, 1), MAX_TPS)
         f["llm_in_tps"] = _bounded(_num(s.llm_in_tps, 1), MAX_TPS)
         f["llm_req"] = _bounded(_int(s.llm_req), 1_000_000)
         f["llm_kv_pct"] = _bounded(_num(s.llm_kv_pct, 1), 100)
         f["llm_spec_pct"] = _bounded(_num(s.llm_spec_pct, 1), 100)
         f["llm_ttft_ms"] = _bounded(_int(s.llm_ttft_ms), MAX_TPS)
-    th = [[label[:MAX_LABEL_CHARS], _num(c, 1)] for label, c in s.temps]
+    th = [[clip(label, MAX_LABEL_CHARS), _num(c, 1)] for label, c in s.temps]
     f["th"] = [x for x in th if x[1] is not None] or None
     return {k: v for k, v in f.items() if v is not None}
+
+
+def clip(text: str, limit: int) -> str:
+    """At most `limit` characters once escaped for JSON (ensure_ascii).
+
+    The board's buffers hold `limit` bytes of decoded UTF-8, and no
+    character takes more UTF-8 bytes than escaped JSON characters (a CJK
+    character: 3 bytes, `\\u4e2d`; an emoji: 4 bytes, two `\\uXXXX`).
+    Control characters are dropped: the board has no glyph for them.
+    """
+    out: list[str] = []
+    used = 0
+    for ch in text:
+        if ord(ch) < 0x20 or ord(ch) == 0x7F:
+            continue
+        width = len(json.dumps(ch)) - 2
+        if used + width > limit:
+            break
+        out.append(ch)
+        used += width
+    return "".join(out)
 
 
 def _dump(f: dict[str, Any]) -> bytes:
@@ -162,7 +188,14 @@ def encode_frame(s: Snapshot) -> bytes:
         else:
             f.pop("th")
         line = _dump(f)
+    # Still over: the longest strings go next, model name first.
+    for key in ("llm_model", "occ"):
+        if len(line) <= MAX_LINE_BYTES:
+            break
+        if f.pop(key, None) is not None:
+            line = _dump(f)
     if len(line) > MAX_LINE_BYTES:
-        # Cannot happen with the per-field caps above. Fail loud in tests.
+        # Cannot happen with the per-field caps above. The daemon catches it
+        # and skips the frame; tests fail on it.
         raise ValueError(f"frame is {len(line)} bytes, over {MAX_LINE_BYTES}")
     return line

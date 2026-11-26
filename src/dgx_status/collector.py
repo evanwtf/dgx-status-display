@@ -22,6 +22,9 @@ from dgx_status.rates import RateTracker, Sample
 
 logger = logging.getLogger(__name__)
 
+# Installed memory changes only on a hotplug; re-read it this often.
+MEMORY_REREAD_S = 600.0
+
 
 def _read(path: Path) -> str:
     try:
@@ -67,6 +70,8 @@ class Collector:
         self._src = sources or Sources()
         self._statvfs = statvfs
         self._llm = llm
+        self._mem_gib: float | None = None
+        self._mem_at: float | None = None
         self._prev_cpu: procfs.CpuTimes | None = None
         self._occupant = OccupantNamer(proc_root)
         bits = 8.0
@@ -77,6 +82,15 @@ class Collector:
         self._cip = RateTracker(bits)
         self._ssd_rd = RateTracker(storage.SECTOR_BYTES)
         self._ssd_wr = RateTracker(storage.SECTOR_BYTES)
+
+    def _installed_gib(self, now: float) -> float | None:
+        """Installed memory, re-read every MEMORY_REREAD_S: it reads one
+        file per memory block (about 1000 here, some 10 ms), and it changes
+        only on a memory hotplug."""
+        if self._mem_at is None or now - self._mem_at >= MEMORY_REREAD_S:
+            self._mem_gib = sysfs.installed_memory_gib(self._sys)
+            self._mem_at = now
+        return self._mem_gib
 
     def _network(self, s: Snapshot, now: float) -> None:
         lan = self._src.lan_iface or netio.default_route_iface(self._proc)
@@ -100,7 +114,9 @@ class Collector:
 
         ifaces = self._src.cluster_ifaces
         if ifaces is None:
-            ifaces = tuple(netio.cluster_ifaces(self._sys))
+            # Never count the LAN twice: if the default route uses a
+            # ConnectX port, that port is the LAN, not the cluster.
+            ifaces = tuple(i for i in netio.cluster_ifaces(self._sys) if i != lan)
         pairs: dict[str, tuple[int, int]] = {}
         for name in ifaces:
             b = netio.netdev_bytes(self._sys, name)
@@ -149,7 +165,8 @@ class Collector:
         mem = procfs.parse_meminfo(_read(self._proc / "meminfo"))
         if mem is not None:
             s.mem_used_gib = mem.used_gib
-        s.mem_total_gib = sysfs.installed_memory_gib(self._sys)
+        now = self._monotonic()
+        s.mem_total_gib = self._installed_gib(now)
 
         g = self._gpu.read()
         s.gpu_pct = g.util_pct
@@ -165,7 +182,6 @@ class Collector:
         s.nic_c = th.nic_c
         s.temps = th.detail
 
-        now = self._monotonic()
         self._network(s, now)
         self._storage(s, now)
         self._llm_fields(s)

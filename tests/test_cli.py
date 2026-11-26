@@ -128,3 +128,12 @@ def test_llm_off_reads_as_idle() -> None:
     from dgx_status.llm import LlmReading
 
     assert llm_source({ENV_LLM_URL: " OFF "})() == LlmReading(engines_up=0)
+
+
+def test_llm_url_off_loopback_refused(caplog: pytest.LogCaptureFixture) -> None:
+    from dgx_status.cli import ENV_LLM_URL, llm_source
+
+    with caplog.at_level("ERROR"):
+        source = llm_source({ENV_LLM_URL: "http://10.1.2.3:9109/metrics"})
+    assert source() is None
+    assert "loopback" in caplog.text

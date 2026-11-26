@@ -279,3 +279,63 @@ def test_llm_reading_is_copied_into_the_frame(live_root: Path) -> None:
     assert s.llm_up == 0 and s.llm_out_tps is None
     reading = None
     assert c.snapshot().llm_up is None
+
+
+def _plain(root: Path, clock: FakeClock, sources: Sources | None = None) -> Collector:
+    return Collector(
+        proc_root=root / "proc",
+        sys_root=root / "sys",
+        gpu=FakeGpu(GpuReading()),
+        host="test-host",
+        clock=lambda: 1.0,
+        monotonic=clock,
+        statvfs=fake_statvfs,
+        sources=sources,
+    )
+
+
+def test_the_lan_is_not_counted_as_cluster_ip(
+    live_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the default route uses a ConnectX port, it is the LAN only."""
+    from dgx_status import netio
+
+    read: list[str] = []
+    real = netio.netdev_bytes
+
+    def spy(sys_root: Path, iface: str) -> tuple[int, int] | None:
+        read.append(iface)
+        return real(sys_root, iface)
+
+    monkeypatch.setattr(netio, "netdev_bytes", spy)
+    c = _plain(live_root, FakeClock(), Sources(lan_iface="enp1s0f0np0"))
+    c.snapshot()
+    assert read.count("enp1s0f0np0") == 1  # the LAN read, not a cluster read
+    assert "enp1s0f1np1" in read
+
+
+def test_installed_memory_is_read_once_per_period(
+    live_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dgx_status import sysfs
+    from dgx_status.collector import MEMORY_REREAD_S
+
+    calls: list[Path] = []
+    real = sysfs.installed_memory_gib
+
+    def counting(sys_root: Path) -> float | None:
+        calls.append(sys_root)
+        return real(sys_root)
+
+    monkeypatch.setattr(sysfs, "installed_memory_gib", counting)
+    clock = FakeClock()
+    c = _plain(live_root, clock)
+    first = c.snapshot().mem_total_gib
+    assert first == pytest.approx(127.875)
+    for _ in range(5):
+        clock.now += 1.0
+        assert c.snapshot().mem_total_gib == first
+    assert len(calls) == 1
+    clock.now += MEMORY_REREAD_S
+    c.snapshot()
+    assert len(calls) == 2
