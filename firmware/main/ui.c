@@ -29,7 +29,8 @@ static int s_applied_brightness = -1;
 static int64_t s_last_change_ms;
 static char s_last_occ[STATUS_OCC_MAX + 1];
 static int s_last_state = -1;
-static bool s_wdt_subscribed;
+/* The task subscribed to the task watchdog: the LVGL task, never main. */
+static TaskHandle_t s_wdt_task;
 static int64_t s_last_stack_log_ms = -STACK_LOG_MS;
 static uint32_t s_lvgl_stack_free;
 static shift_t s_last_shift = {127, 127};
@@ -65,16 +66,27 @@ static void on_refresh_ready(lv_event_t *e)
 /* The LVGL task feeds the task watchdog from this timer. If the LVGL task
  * hangs, the timer stops, the watchdog fires, and the panic handler reboots
  * the board (CONFIG_ESP_TASK_WDT_PANIC). A hung UI must not sit on a stale
- * LIVE screen. */
+ * LIVE screen.
+ *
+ * Only ever from the LVGL timer. esp_task_wdt_add(NULL) subscribes the
+ * *calling* task. ui_init() runs in the main task, which ends when app_main
+ * returns; FreeRTOS does not unsubscribe a deleted task, so a subscription
+ * made there is never fed and panics the board 10 s after boot. */
 static void feed_watchdog(void)
 {
-    if (!s_wdt_subscribed) {
-        esp_err_t err = esp_task_wdt_add(NULL);
+    TaskHandle_t self = xTaskGetCurrentTaskHandle();
+    if (s_wdt_task == NULL) {
+        esp_err_t err = esp_task_wdt_add(self);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "task watchdog subscribe failed: %s", esp_err_to_name(err));
             return;
         }
-        s_wdt_subscribed = true;
+        s_wdt_task = self;
+        ESP_LOGI(TAG, "task watchdog: subscribed %s", pcTaskGetName(self));
+    }
+    if (self != s_wdt_task) {
+        ESP_LOGE(TAG, "watchdog fed from %s, not the subscribed task", pcTaskGetName(self));
+        return;
     }
     esp_task_wdt_reset();
 }
@@ -89,12 +101,14 @@ static void log_stack(int64_t now)
     }
 }
 
+/* t is NULL only for the first call, from ui_init() in the main task. */
 static void tick(lv_timer_t *t)
 {
-    (void)t;
     int64_t now = now_ms();
-    feed_watchdog();
-    log_stack(now);
+    if (t != NULL) {
+        feed_watchdog();
+        log_stack(now);
+    }
     serial_rx_get(&s_rx);
     link_state_t st = link_state(&s_rx.link, now);
     carousel_tick(&s_carousel, st, now);
