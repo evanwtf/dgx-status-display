@@ -17,3 +17,6 @@ firmware/test/build/
 # Factory firmware backups: device-specific binaries. Keep them out of git.
 backup/
 *.bin
+
+# Local deny list for scripts/check_public.py. Never commit it.
+/.public-denylist
