@@ -40,6 +40,9 @@ def test_no_step_touches_a_serial_port() -> None:
     for cmd in COMMANDS.values():
         argv = docker_argv(cmd, Path("/repo"), 1, 1)
         joined = " ".join(argv)
+        # "flash_args" is a file the merge step reads; any other "flash" is not.
+        assert "flash" not in joined.replace("flash_args", "")
+        assert "--privileged" not in joined
         assert "--device" not in joined
         assert "/dev/" not in joined
         assert "--port" not in joined

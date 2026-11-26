@@ -134,24 +134,35 @@ Within a few seconds the log shows `connected to /dev/serial/by-id/...`, and
 ## Install from a release
 
 Each [release](https://github.com/evanwtf/dgx-status-display/releases) holds
-the built firmware and the daemon, so you need no build. Do steps 1 and 3 of
-the bootstrap first: set the variables and back up the factory firmware.
-Here `$REPO` is a plain folder, not a clone, so create it before step 3
-(`mkdir -p "$REPO"`). These commands then take the place of steps 2 and 4.
+the built firmware, so you need no firmware build. The daemon comes from a
+clone of the same tag, with its locked dependencies. These steps take the
+place of bootstrap steps 2 and 4. Do step 1 (the variables) first.
 
-Download the files and check them:
+Get the daemon at the release tag and check it. This replaces step 2:
 
 ```bash
 export VERSION=0.0.1
-mkdir -p "$REPO/release" "$REPO/deploy" && cd "$REPO/release"
+git clone --branch "v$VERSION" https://github.com/evanwtf/dgx-status-display "$REPO"
+cd "$REPO" && uv sync --frozen --no-dev
+uv run --frozen --no-dev dgx-status --version
+uv run --frozen --no-dev dgx-status --dry-run --once
+```
+
+Do step 3 now (back up the factory firmware). Then download the firmware
+and check it:
+
+```bash
+mkdir -p "$REPO/release" && cd "$REPO/release"
 BASE=https://github.com/evanwtf/dgx-status-display/releases/download/v$VERSION
 for f in SHA256SUMS "dgx-status-display-$VERSION-esp32c6-merged.bin" \
-    "dgx_status-$VERSION-py3-none-any.whl"; do curl -fsSLO "$BASE/$f"; done
+    "dgx-status-display-$VERSION-esp32c6.zip"; do curl -fsSLO "$BASE/$f"; done
 sha256sum --ignore-missing -c SHA256SUMS    # each file must say OK
 ```
 
-Flash the merged image at 0x0. It holds the bootloader, the partition table
-and the app:
+**First install:** flash the merged image at 0x0. It holds the bootloader,
+the partition table and the app, with 0xFF between them. It erases the
+board's stored settings (the screen rotation and the chart style), so use it
+only for a first install:
 
 ```bash
 docker run --rm --device="$DEV" -v "$REPO/release:/release:ro" -w /release "$IDF_IMAGE" \
@@ -159,22 +170,29 @@ docker run --rm --device="$DEV" -v "$REPO/release:/release:ro" -w /release "$IDF
   write_flash 0x0 "dgx-status-display-$VERSION-esp32c6-merged.bin"
 ```
 
-Install the daemon in `$REPO/.venv`, the path the service runs, and get the
-service template from the same tag:
+Then install the service (step 5).
+
+**Upgrade:** flash the parts from the zip with `flash_args`. This writes only
+the bootloader, the partition table and the app, so the settings stay. The
+service holds the port, so stop it first:
 
 ```bash
-uv venv --python 3.13 "$REPO/.venv"
-uv pip install --python "$REPO/.venv" "$REPO/release/dgx_status-$VERSION-py3-none-any.whl"
-"$REPO/.venv/bin/dgx-status" --version
-"$REPO/.venv/bin/dgx-status" --dry-run --once
-curl -fsSL -o "$REPO/deploy/dgx-status.service" \
-  "https://raw.githubusercontent.com/evanwtf/dgx-status-display/v$VERSION/deploy/dgx-status.service"
+cd "$REPO/release"
+python3 -m zipfile -e "dgx-status-display-$VERSION-esp32c6.zip" .
+sudo systemctl stop dgx-status
+docker run --rm --device="$DEV" -v "$REPO/release:/release:ro" \
+  -w "/release/dgx-status-display-$VERSION-esp32c6" "$IDF_IMAGE" \
+  esptool.py --chip esp32c6 -p "$DEV" -b 460800 --before default_reset --after hard_reset \
+  write_flash "@flash_args"
+sudo systemctl start dgx-status
 ```
 
-Then install the service (step 5). The release also has
-`dgx-status-display-$VERSION-esp32c6.zip` (the separate images and
-`flash_args`), the sdist, and `dgx_status_display-$VERSION.elf` to decode a
-core dump (`scripts/firmware.py coredump --elf`, in a clone).
+To upgrade the daemon too, check out the new tag in `$REPO` and run
+`uv sync --frozen --no-dev` before you start the service.
+
+The release also has `dgx-status-display-$VERSION-esp32c6.elf` to decode a
+core dump (`scripts/firmware.py coredump --elf`), the wheel and the sdist,
+and `dgx-status.service`. `SHA256SUMS` covers every file.
 
 ## Serial port access
 
@@ -304,10 +322,11 @@ fails if a value's last digit changes column between two values.
 ### Cut a release
 
 A `v*` tag runs `.github/workflows/release.yml`. It refuses the tag unless
-the three declared versions equal it and `docs/changelog.md` has one
-non-empty section for it that does not say "unreleased". It runs every
-check, builds the firmware and the wheel, and publishes the release with the
-notes from the changelog. The tag message holds no notes.
+the three declared versions equal it, the tagged commit is on `main`, and
+`docs/changelog.md` has one non-empty `## X.Y.Z (YYYY-MM-DD)` section for
+it. It runs every check, builds the firmware and the wheel, checks that each
+build carries the tag's version, and publishes the release with the notes
+from the changelog. The tag message holds no notes.
 
 1. Rename the changelog's top section to `## X.Y.Z (YYYY-MM-DD)`.
 2. Set `X.Y.Z` in `pyproject.toml`, `src/dgx_status/__init__.py` and

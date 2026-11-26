@@ -31,7 +31,7 @@ ESP32-C6-Touch-AMOLED-2.16. ESP-IDF firmware draws it with LVGL.
 | `src/dgx_status/` | The daemon. Parsers (`procfs.py`, `sysfs.py`, `occupant.py`), NVML (`gpu.py`), frame encoder (`frame.py`), `collector.py`, `serial_link.py`, `daemon.py`, `cli.py`. |
 | `tests/` | One file per module. `fixtures/spark/` holds /proc and /sys files copied from a DGX. No hook may rewrite them. |
 | `firmware/` | ESP-IDF project. `main/logic/` is pure C (frames, formatting, tiles, carousel, palette, history, settings) with host tests in `firmware/test/`. `main/view.c` is LVGL only; `firmware/test/preview/` renders it on the host. `main/fonts/` is generated. `main/board.h` cites the pin sources. |
-| `scripts/` | `firmware.py` (build, test, merge and preview in the pinned IDF image), `gen_fonts.py` (the value fonts), `check_public.py` (the public-repo guard), `release_check.py` (the release refusals: tag against the three versions, changelog notes, merged image), `capture_fixtures.py`. |
+| `scripts/` | `firmware.py` (build, test, merge and preview in the pinned IDF image), `gen_fonts.py` (the value fonts), `check_public.py` (the public-repo guard), `release_check.py` (the release checks: tag against the three versions, changelog notes, merged image, built versions, asset staging), `capture_fixtures.py`. |
 | `deploy/` | The systemd unit. |
 | `.github/workflows/` | `check.yml` (every push to main and every PR; also called by the release), `release.yml` (a `v*` tag: refusals, checks, build, publish). |
 | `docs/` | `protocol.md` (the wire format), `plan.md`, `changelog.md`. |
@@ -57,6 +57,10 @@ Before a release tag (README, "Cut a release"):
 uv run python scripts/release_check.py version vX.Y.Z    # tag = all three versions
 uv run python scripts/release_check.py notes X.Y.Z "$(mktemp)"
 uv run python scripts/firmware.py merge    # one image for 0x0 (after build)
+uv run python scripts/release_check.py merged firmware/build firmware/build/dgx_status_display-merged.bin
+uv build --out-dir dist
+uv run python scripts/release_check.py built vX.Y.Z firmware/build dist
+uv run python scripts/release_check.py stage vX.Y.Z firmware/build dist deploy/dgx-status.service "$(mktemp -d)/release"
 ```
 
 ## Releases
@@ -67,9 +71,10 @@ uv run python scripts/firmware.py merge    # one image for 0x0 (after build)
   `tests/test_release_check.py` keeps them equal.
 - **Notes come from `docs/changelog.md`,** never from the tag message. A
   version needs a `## X.Y.Z (YYYY-MM-DD)` section before its tag; the check
-  refuses a missing, empty, duplicate or "unreleased" one.
-- **Agents do not push tags** unless a person asks. A tag publishes a public
-  release.
+  refuses a missing, empty, duplicate, undated or "unreleased" one.
+- **The merged image erases NVS** (the stored settings). The README uses it
+  for a first install only; an upgrade flashes the zip's parts with
+  `@flash_args`.
 
 ## Rules for this repo
 

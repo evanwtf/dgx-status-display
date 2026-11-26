@@ -15,6 +15,12 @@ on:
 permissions:
   contents: read
 
+# One release run per tag at a time. A second push of the tag waits; it
+# does not cancel a run that may be publishing.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # Cheap refusals first, before the long build.
   preflight:
@@ -22,12 +28,18 @@ jobs:
     timeout-minutes: 10
     env:
       TAG: ${{ github.ref_name }}
-      GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0  # for the main ancestry check
+      - name: the tagged commit is on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "$TAG points at $GITHUB_SHA, which is not on main"
+            exit 1
+          fi
       - run: echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - run: uv sync --frozen
@@ -37,14 +49,18 @@ jobs:
         run: |
           uv run --frozen python scripts/release_check.py notes "${TAG#v}" "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
+      # A read-only token cannot see a draft; the publish job checks again
+      # with write access, which can.
       - name: no release exists for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if out=$(gh api "repos/$GH_REPO/releases/tags/$TAG" 2>&1); then
-            echo "a release for $TAG exists already"
+          if out=$(gh release view "$TAG" --json tagName,isDraft 2>&1); then
+            echo "a release for $TAG exists already: $out"
             exit 1
           fi
           case "$out" in
-            *"HTTP 404"*) echo "no release for $TAG yet" ;;
+            "release not found") echo "no release for $TAG yet" ;;
             *) echo "$out"; exit 1 ;;
           esac
 
@@ -81,38 +97,26 @@ jobs:
             firmware/build firmware/build/dgx_status_display-merged.bin
       - name: wheel and sdist
         run: uv build --out-dir dist
-      - name: stage the assets
+      - name: the firmware build, wheel and sdist carry the tag's version
+        run: uv run --frozen python scripts/release_check.py built "$TAG" firmware/build dist
+      # The zip holds every file flash_args names, in one folder, so
+      # `esptool.py write_flash @flash_args` works inside it.
+      - name: stage the assets and SHA256SUMS
         run: |
-          version="${TAG#v}"
           out="$RUNNER_TEMP/release"
           rm -rf "$out"
-          mkdir -p "$out"
-          cp firmware/build/dgx_status_display-merged.bin \
-            "$out/dgx-status-display-$version-esp32c6-merged.bin"
-          cp firmware/build/dgx_status_display.elf "$out/dgx_status_display-$version.elf"
-          # The zip holds one folder with the paths flash_args names, so
-          # `esptool.py write_flash @flash_args` works inside it. (The
-          # zipfile CLI drops the folders of a file it is given, so it gets
-          # the whole folder.)
-          pkg="dgx-status-display-$version-esp32c6"
-          stage="$RUNNER_TEMP/zip/$pkg"
-          rm -rf "$RUNNER_TEMP/zip"
-          mkdir -p "$stage/bootloader" "$stage/partition_table"
-          cp firmware/build/bootloader/bootloader.bin "$stage/bootloader/"
-          cp firmware/build/partition_table/partition-table.bin "$stage/partition_table/"
-          cp firmware/build/dgx_status_display.bin firmware/build/flash_args "$stage/"
-          (cd "$RUNNER_TEMP/zip" && uv run --frozen --project "$GITHUB_WORKSPACE" \
-            python -m zipfile -c "$out/$pkg.zip" "$pkg")
-          cp "dist/dgx_status-$version-py3-none-any.whl" "dist/dgx_status-$version.tar.gz" "$out/"
-          (cd "$out" && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+          uv run --frozen python scripts/release_check.py stage "$TAG" \
+            firmware/build dist deploy/dgx-status.service "$out"
+          cat "$out/SHA256SUMS"
           echo "ASSETS=$out" >> "$GITHUB_ENV"
-      # A hand-off to the publish job only: one day is enough.
+      # A hand-off to the publish job only. Three days, so a failed publish
+      # can run again (baseline ci.md).
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ github.ref_name }}
           path: ${{ env.ASSETS }}/*
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 3
 
   publish:
     needs: [preflight, check, build]
@@ -122,7 +126,6 @@ jobs:
       contents: write
     env:
       TAG: ${{ github.ref_name }}
-      GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -142,18 +145,32 @@ jobs:
           ls -l
       - name: notes from the changelog
         run: uv run --frozen python scripts/release_check.py notes "${TAG#v}" "$RUNNER_TEMP/notes.md"
-      # Again here: another run may have published while this one built.
-      - name: no release exists for this tag
+      # Again with write access, which also sees a draft. Only "release not
+      # found" means there is none; any other error stops the run.
+      - name: no release or draft exists for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if out=$(gh api "repos/$GH_REPO/releases/tags/$TAG" 2>&1); then
-            echo "a release for $TAG exists already"
+          if out=$(gh release view "$TAG" --json tagName,isDraft 2>&1); then
+            echo "a release for $TAG exists already: $out"
             exit 1
           fi
           case "$out" in
-            *"HTTP 404"*) echo "no release for $TAG yet" ;;
+            "release not found") echo "no release for $TAG yet" ;;
             *) echo "$out"; exit 1 ;;
           esac
+      - name: the tag still points at this run's commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)
+          if [ "$sha" != "$GITHUB_SHA" ]; then
+            echo "$TAG now points at $sha, but this run built $GITHUB_SHA"
+            exit 1
+          fi
       - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$TAG" --verify-tag --title "$TAG" \
             --notes-file "$RUNNER_TEMP/notes.md" "$RUNNER_TEMP"/release/*

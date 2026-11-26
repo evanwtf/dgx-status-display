@@ -4,10 +4,15 @@
 
 The first release. It is phase 1: a DGX Spark sends its status over USB
 serial, and a Waveshare ESP32-C6-Touch-AMOLED-2.16 shows it. There is no
-Wi-Fi yet. The release holds the daemon (a wheel and an sdist) and the
-firmware: one merged image to flash at 0x0, the separate images with
-`flash_args`, and the ELF to decode a core dump. `SHA256SUMS` covers every
-file.
+Wi-Fi yet. The release holds the daemon (a wheel and an sdist), the
+systemd unit template and the firmware: one merged image to flash at 0x0,
+the separate images with `flash_args`, and the ELF to decode a core dump.
+`SHA256SUMS` covers every file. The daemon installs from a clone of the
+tag, with its locked dependencies.
+
+Flash the merged image only for a first install: it erases the stored
+settings (the screen rotation and the chart style). To upgrade, flash the
+zip's parts with `write_flash @flash_args`, which keeps them.
 
 - Releases: a `v*` tag publishes a GitHub release. The workflow refuses a
   tag that differs from any declared version, and takes the notes from this

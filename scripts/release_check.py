@@ -3,6 +3,9 @@
     python scripts/release_check.py version v0.0.1
     python scripts/release_check.py notes 0.0.1 notes.md
     python scripts/release_check.py merged firmware/build merged.bin
+    python scripts/release_check.py built v0.0.1 firmware/build dist
+    python scripts/release_check.py stage v0.0.1 firmware/build dist \
+        deploy/dgx-status.service OUT
 
 `version TAG` refuses a tag that is not `v` and a plain `X.Y.Z`, and a tag
 that disagrees with any declared version: `pyproject.toml` (the wheel),
@@ -11,13 +14,23 @@ that disagrees with any declared version: `pyproject.toml` (the wheel),
 parsed, not searched.
 
 `notes VERSION OUT` writes that version's section of `docs/changelog.md`,
-without its heading, to OUT. It refuses a missing, empty, duplicate or
-"unreleased" section. The notes come from the changelog, not from a tag
-message: the shell expands backticks in a hand-typed `git tag -m`.
+without its heading, to OUT. The heading must be `## X.Y.Z (YYYY-MM-DD)`
+with a real date. It refuses a missing, empty, duplicate or "unreleased"
+section. A `## ` line inside a code fence is not a heading. The notes come
+from the changelog, not from a tag message: the shell expands backticks in a
+hand-typed `git tag -m`.
 
 `merged BUILD_DIR IMAGE` refuses a merged image unless each file that
 BUILD_DIR/flash_args lists sits at its offset byte for byte, with 0xFF in
 the gaps.
+
+`built TAG BUILD_DIR DIST_DIR` refuses build outputs that carry another
+version: `project_version` in BUILD_DIR/project_description.json, the
+`Version:` in the one wheel's METADATA, and the sdist's name.
+
+`stage TAG BUILD_DIR DIST_DIR UNIT OUT` copies the release assets into OUT
+and writes SHA256SUMS over them. The firmware zip holds every file that
+flash_args names, at the path it names, inside one folder.
 
 Stdlib only. Every refusal logs the reason and exits 1.
 """
@@ -26,12 +39,18 @@ from __future__ import annotations
 
 import argparse
 import ast
+import datetime
+import email.parser
+import hashlib
+import json
 import logging
 import re
 import shlex
+import shutil
 import sys
 import tomllib
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 
 logger = logging.getLogger("release_check")
 
@@ -40,6 +59,10 @@ PYPROJECT = "pyproject.toml"
 INIT = "src/dgx_status/__init__.py"
 CMAKE = "firmware/CMakeLists.txt"
 CHANGELOG = "docs/changelog.md"
+MERGED = "dgx_status_display-merged.bin"  # scripts/firmware.py merge writes it
+ELF = "dgx_status_display.elf"
+DIST_NAME = "dgx_status"  # the wheel and sdist file name prefix
+ASSET_PREFIX = "dgx-status-display"
 
 # ASCII digits only: \d also matches other scripts' digits. No leading zeros.
 _NUM = "(?:0|[1-9][0-9]*)"
@@ -48,7 +71,9 @@ TAG_RE = re.compile(rf"v({VERSION_RE.pattern})")
 _PROJECT_VER_RE = re.compile(
     r'^[ \t]*set\([ \t]*PROJECT_VER[ \t]+"([^"\n]*)"[ \t]*\)', re.MULTILINE
 )
-_FENCE_RE = re.compile(r"^(```|~~~)")
+# A CommonMark code fence: up to 3 spaces, then 3 or more ` or ~.
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_HEADING_DATE_RE = re.compile(r"\(([0-9]{4}-[0-9]{2}-[0-9]{2})\)")
 
 
 class ReleaseError(Exception):
@@ -121,12 +146,17 @@ def declared_versions(root: Path) -> dict[str, str]:
     }
 
 
-def check_tag(tag: str, root: Path) -> str:
-    """Return the version in a `vX.Y.Z` tag that every file declares."""
+def tag_version(tag: str) -> str:
+    """The X.Y.Z in a `vX.Y.Z` tag, or refuse."""
     m = TAG_RE.fullmatch(tag)
     if m is None:
         raise ReleaseError(f"tag {tag!r} is not v and a plain X.Y.Z")
-    version = m.group(1)
+    return m.group(1)
+
+
+def check_tag(tag: str, root: Path) -> str:
+    """Return the version in a `vX.Y.Z` tag that every file declares."""
+    version = tag_version(tag)
     wrong = [
         f"{name} says {declared!r}"
         for name, declared in declared_versions(root).items()
@@ -143,11 +173,16 @@ def changelog_section(text: str, version: str) -> str:
         raise ReleaseError(f"version {version!r} is not a plain X.Y.Z")
     sections: list[tuple[str, list[str]]] = []
     current: list[str] | None = None
-    in_fence = False
+    fence: str | None = None  # the open fence's run of ` or ~
     for line in text.splitlines():
-        if _FENCE_RE.match(line):
-            in_fence = not in_fence
-        if not in_fence and line.startswith("## "):
+        m = _FENCE_RE.match(line)
+        if m is not None:
+            run, rest = m.group(1), m.group(2)
+            if fence is None:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence) and not rest.strip():
+                fence = None
+        elif fence is None and line.startswith("## "):
             heading = line[3:].strip()
             current = [] if heading.split(maxsplit=1)[:1] == [version] else None
             if current is not None:
@@ -162,6 +197,18 @@ def changelog_section(text: str, version: str) -> str:
     heading, lines = sections[0]
     if "unreleased" in heading.lower():
         raise ReleaseError(f"{CHANGELOG}: the {version} heading says unreleased")
+    rest = heading[len(version) :].strip()
+    m = _HEADING_DATE_RE.fullmatch(rest)
+    if m is None:
+        raise ReleaseError(
+            f"{CHANGELOG}: the {version} heading is not '## {version} (YYYY-MM-DD)'"
+        )
+    try:
+        datetime.date.fromisoformat(m.group(1))
+    except ValueError:
+        raise ReleaseError(
+            f"{CHANGELOG}: the {version} heading has no real date ({m.group(1)})"
+        ) from None
     body = "\n".join(lines).strip()
     if not body:
         raise ReleaseError(f"{CHANGELOG}: the {version} section is empty")
@@ -227,6 +274,100 @@ def check_merged(build_dir: Path, image: Path) -> list[tuple[int, str, int]]:
     return [(offset, name, len(data)) for offset, name, data in sorted(parts)]
 
 
+def find_one(dist_dir: Path, pattern: str) -> Path:
+    """The one file in dist_dir that matches pattern, or refuse."""
+    found = sorted(dist_dir.glob(pattern))
+    if len(found) != 1:
+        raise ReleaseError(f"{dist_dir.name}: {len(found)} files match {pattern}")
+    return found[0]
+
+
+def wheel_version(wheel: Path) -> str:
+    """The `Version:` field in a wheel's METADATA."""
+    try:
+        with zipfile.ZipFile(wheel) as zf:
+            names = [n for n in zf.namelist() if n.endswith(".dist-info/METADATA")]
+            if len(names) != 1:
+                raise ReleaseError(f"{wheel.name}: {len(names)} METADATA files")
+            raw = zf.read(names[0])
+    except zipfile.BadZipFile:
+        raise ReleaseError(f"{wheel.name}: not a zip file") from None
+    try:
+        meta = email.parser.HeaderParser().parsestr(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        raise ReleaseError(f"{wheel.name}: METADATA is not UTF-8") from None
+    version = meta.get("Version")
+    if version is None:
+        raise ReleaseError(f"{wheel.name}: METADATA has no Version")
+    return str(version)
+
+
+def check_built(tag: str, build_dir: Path, dist_dir: Path) -> str:
+    """Refuse a firmware build, wheel or sdist that carries another version."""
+    version = tag_version(tag)
+    desc_path = build_dir / "project_description.json"
+    try:
+        desc = json.loads(read_text(desc_path))
+    except json.JSONDecodeError:
+        raise ReleaseError(f"{desc_path.name}: not valid JSON") from None
+    fw = desc.get("project_version") if isinstance(desc, dict) else None
+    if fw != version:
+        raise ReleaseError(f"firmware build says {fw!r}, tag says {version}")
+    wheel = find_one(dist_dir, f"{DIST_NAME}-*.whl")
+    in_wheel = wheel_version(wheel)
+    if in_wheel != version:
+        raise ReleaseError(f"{wheel.name} says {in_wheel!r}, tag says {version}")
+    if not wheel.name.startswith(f"{DIST_NAME}-{version}-"):
+        raise ReleaseError(f"{wheel.name}: the name does not carry {version}")
+    sdist = find_one(dist_dir, f"{DIST_NAME}-*.tar.gz")
+    if sdist.name != f"{DIST_NAME}-{version}.tar.gz":
+        raise ReleaseError(f"{sdist.name}: the name does not carry {version}")
+    return version
+
+
+def _copy(src: Path, dest: Path) -> None:
+    if not src.is_file():
+        raise ReleaseError(f"{src.name}: no such file")
+    shutil.copyfile(src, dest)
+
+
+def stage(
+    tag: str, build_dir: Path, dist_dir: Path, unit: Path, out: Path
+) -> list[str]:
+    """Copy the release assets into out and write SHA256SUMS. Return the names."""
+    version = tag_version(tag)
+    layout = flash_layout(read_text(build_dir / "flash_args"))
+    out.mkdir(parents=True, exist_ok=True)
+    if any(out.iterdir()):
+        raise ReleaseError(f"{out}: not empty")
+    fw = f"{ASSET_PREFIX}-{version}-esp32c6"
+    _copy(build_dir / MERGED, out / f"{fw}-merged.bin")
+    _copy(build_dir / ELF, out / f"{fw}.elf")
+    # One folder with the paths flash_args names, so that
+    # `esptool.py write_flash @flash_args` works inside it.
+    members = ["flash_args", *(name for _, name in layout)]
+    with zipfile.ZipFile(out / f"{fw}.zip", "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in members:
+            rel = PurePosixPath(name)
+            if rel.is_absolute() or ".." in rel.parts:
+                raise ReleaseError(f"flash_args: {name} is outside the build")
+            src = build_dir / rel
+            if not src.is_file():
+                raise ReleaseError(f"flash_args names {name}, which is missing")
+            zf.write(src, f"{fw}/{rel}")
+    wheel = find_one(dist_dir, f"{DIST_NAME}-{version}-*.whl")
+    _copy(wheel, out / wheel.name)
+    sdist = f"{DIST_NAME}-{version}.tar.gz"
+    _copy(dist_dir / sdist, out / sdist)
+    _copy(unit, out / unit.name)
+    names = sorted(p.name for p in out.iterdir())
+    sums = "".join(
+        f"{hashlib.sha256((out / n).read_bytes()).hexdigest()}  {n}\n" for n in names
+    )
+    (out / "SHA256SUMS").write_text(sums, encoding="utf-8")
+    return [*names, "SHA256SUMS"]
+
+
 def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
     logging.basicConfig(
         level=logging.INFO, stream=sys.stdout, format="%(levelname)s %(message)s"
@@ -241,6 +382,16 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
     m = sub.add_parser("merged", help="the merged image equals its parts")
     m.add_argument("build_dir", type=Path)
     m.add_argument("image", type=Path)
+    b = sub.add_parser("built", help="the build outputs carry the tag's version")
+    b.add_argument("tag")
+    b.add_argument("build_dir", type=Path)
+    b.add_argument("dist_dir", type=Path)
+    st = sub.add_parser("stage", help="copy the assets and write SHA256SUMS")
+    st.add_argument("tag")
+    st.add_argument("build_dir", type=Path)
+    st.add_argument("dist_dir", type=Path)
+    st.add_argument("unit", type=Path, help="the systemd unit template")
+    st.add_argument("out", type=Path)
     args = p.parse_args(argv)
     try:
         if args.cmd == "version":
@@ -252,6 +403,14 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
         elif args.cmd == "notes":
             notes = write_notes(args.version, args.out, root)
             logger.info("wrote %d lines of notes to %s", notes.count("\n"), args.out)
+        elif args.cmd == "built":
+            version = check_built(args.tag, args.build_dir, args.dist_dir)
+            logger.info("the firmware, wheel and sdist all say %s", version)
+        elif args.cmd == "stage":
+            for name in stage(
+                args.tag, args.build_dir, args.dist_dir, args.unit, args.out
+            ):
+                logger.info("staged %s", name)
         else:
             for offset, name, size in check_merged(args.build_dir, args.image):
                 logger.info("%#08x %s (%d bytes) matches", offset, name, size)
