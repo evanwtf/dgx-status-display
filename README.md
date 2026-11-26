@@ -268,8 +268,12 @@ sudo systemctl disable --now dgx-status   # the factory app does not read frames
 
 The panel is about 40 mm across, so every value is big. Six pages of four
 colored tiles cycle every 10 seconds, with a 0.3 s fade through black
-between pages. The LLM page shows only while an LLM engine is up. Each tile has a label, one value and a
-unit.
+between pages. Each tile has a label, one value and a unit.
+
+The LLM page shows only while the daemon reads at least one engine up from
+the LLM metrics exporter. The exporter must listen on loopback (the daemon
+refuses any other address). While the exporter is down, or too slow to
+answer for 15 s, the page hides.
 
 | Page | Tiles |
 | --- | --- |

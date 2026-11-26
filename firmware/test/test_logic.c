@@ -1351,18 +1351,21 @@ static void test_llm_page(void)
     status_frame_t f;
     status_frame_clear(&f);
     tile_t t[TILES_PER_PAGE];
-    /* Exporter unreadable: dashes, and the page still shows. */
+    /* Exporter unknown: dashes if drawn, but the carousel hides the page. */
     page_tiles(PAGE_LLM, &f, t);
     for (int i = 0; i < TILES_PER_PAGE; i++) {
         CHECK_STR(t[i].value, FMT_DASH);
         CHECK(t[i].hue == HUE_LLM);
     }
-    CHECK(!page_hidden(PAGE_LLM, &f));
+    CHECK(page_hidden(PAGE_LLM, &f)); /* unknown: hidden */
     char d[200];
     CHECK(!llm_detail(d, sizeof(d), &f));
     /* Idle: hidden. */
     f.llm_up = 0;
     CHECK(page_hidden(PAGE_LLM, &f) && !page_hidden(PAGE_GPU, &f));
+    f.llm_up = 2; /* two engines up */
+    CHECK(!page_hidden(PAGE_LLM, &f));
+    f.llm_up = 0;
     CHECK(!llm_detail(d, sizeof(d), &f));
     /* Busy. */
     f.llm_up = 1;

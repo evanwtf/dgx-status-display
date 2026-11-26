@@ -3,7 +3,10 @@
 ## Unreleased
 
 New firmware needs the daemon from this version. With an older daemon,
-the Network and Storage pages show dashes.
+the Network and Storage pages show dashes and the LLM page stays hidden.
+Install the new systemd unit too: the old one hides the host network
+from the daemon (`PrivateNetwork=yes`), so the LAN and Cluster IP tiles
+show dashes and the LLM page stays hidden.
 
 - Page changes fade through black: the panel brightness falls to 0 in
   150 ms on a quadratic curve, the new view is drawn whole at 0, and the
@@ -11,8 +14,9 @@ the Network and Storage pages show dashes.
   Taps, the detail page and a KEY rotation fade too; NO DATA does not. The
   `free:` line reports the last transition's time.
 - LLM page: Output and Prompt tok/s, Requests running and KV cache %, from
-  the local LLM metrics exporter, in a slate family. The carousel skips it
-  while no engine is up; an exporter the daemon cannot read shows dashes.
+  the local LLM metrics exporter, in a slate family. The carousel shows it
+  only while an engine is up. It hides it while the exporter is down or
+  slower than 15 s. The exporter must listen on loopback.
   The detail page opened from it lists the models, the time to first token
   and the draft-token acceptance.
 - Network and Storage pages: LAN in/out against the link speed, RoCE in/out

@@ -67,6 +67,7 @@ static bool s_animate = true;
 /* Detail */
 static lv_obj_t *s_d_clock, *s_d_col[2], *s_d_footer;
 static lv_obj_t *s_d_chart_value, *s_d_title;
+static bool s_d_llm_mode = true; /* true forces the first layout to temperatures */
 /* NO DATA */
 static lv_obj_t *s_n_age, *s_n_hint;
 
@@ -514,18 +515,21 @@ static void render_detail(const view_model_t *m)
     const int inner = W - 2 * 28;
     /* Opened from the LLM page with an engine up: the engines, not the
      * temperatures. */
-    if (m->page == PAGE_LLM && llm_detail(line, sizeof(line), f)) {
-        set_text(s_d_title, "LLM engines");
-        lv_obj_set_width(s_d_col[0], inner);
-        lv_label_set_long_mode(s_d_col[0], LV_LABEL_LONG_MODE_WRAP);
+    const bool llm = m->page == PAGE_LLM && llm_detail(line, sizeof(line), f);
+    /* Re-lay the first column only when the mode changes: a width or long
+     * mode change makes LVGL re-measure and redraw the label. */
+    if (llm != s_d_llm_mode) {
+        s_d_llm_mode = llm;
+        set_text(s_d_title, llm ? "LLM engines" : "All temperatures");
+        lv_obj_set_width(s_d_col[0], llm ? inner : inner / 2 - 8);
+        lv_label_set_long_mode(s_d_col[0],
+                               llm ? LV_LABEL_LONG_MODE_WRAP : LV_LABEL_LONG_MODE_CLIP);
+        lv_obj_set_hidden(s_d_col[1], llm);
+    }
+    if (llm) {
         set_text(s_d_col[0], line);
         set_text(s_d_col[1], "");
-        lv_obj_set_hidden(s_d_col[1], true);
     } else {
-        set_text(s_d_title, "All temperatures");
-        lv_obj_set_width(s_d_col[0], inner / 2 - 8);
-        lv_obj_set_hidden(s_d_col[1], false);
-        lv_label_set_long_mode(s_d_col[0], LV_LABEL_LONG_MODE_CLIP);
         const int per_col = (f->n_temps + 1) / 2;
         for (int c = 0; c < 2; c++) {
             size_t n = 0;

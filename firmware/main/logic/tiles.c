@@ -195,7 +195,8 @@ void fmt_bytes_rate(double bytes_s, char *value, size_t vcap, char *unit, size_t
 
 bool page_hidden(page_id_t p, const status_frame_t *f)
 {
-    return p == PAGE_LLM && f->llm_up == 0;
+    /* NaN fails the test too: unknown hides the page, as 0 does. */
+    return p == PAGE_LLM && !(f->llm_up >= 1);
 }
 
 bool llm_detail(char *buf, size_t cap, const status_frame_t *f)

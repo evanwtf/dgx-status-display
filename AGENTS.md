@@ -21,9 +21,10 @@ ESP32-C6-Touch-AMOLED-2.16. ESP-IDF firmware draws it with LVGL.
   read. A person backs up the factory firmware before the first flash
   (README, step 3).
 - Read live data only: `/proc`, `/sys`, NVML, and the local LLM metrics
-  exporter's `/metrics` (loopback, read-only, for the LLM page). No other
-  exporter or metrics store is a data source for the board. `--dry-run`
-  opens no device.
+  exporter's `/metrics` (loopback only, read-only, for the LLM page; the
+  daemon refuses any other host). No other exporter or metrics store is a
+  data source for the board. The LLM page hides while the exporter is down
+  or slow. `--dry-run` opens no device.
 - No system changes from agent work: no apt, `usermod`, udev rules or
   systemd install.
 

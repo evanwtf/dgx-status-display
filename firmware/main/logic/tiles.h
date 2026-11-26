@@ -118,9 +118,9 @@ void fmt_bytes_rate(double bytes_s, char *value, size_t vcap, char *unit, size_t
 char *fmt_tb(char *buf, size_t cap, double gb, int max_decimals);
 /* Tokens per second, the same rules: "45.0", "940", then "2.0" with the
  * unit "k tok/s". */
-/* True when page p has nothing to show: the LLM page while the exporter
- * reports no engine up (llm_up 0). An unreadable exporter (llm_up unknown)
- * keeps the page, so its dashes show the fault. */
+/* True when page p has nothing to show: the LLM page unless an engine is
+ * up (llm_up 1 or more). A missing llm_up (the exporter down, slow, or an
+ * older daemon) hides it too: no page of dashes in the carousel. */
 bool page_hidden(page_id_t p, const status_frame_t *f);
 /* The detail page's LLM text: models, then TTFT and speculative
  * acceptance when known. Returns false when no engine is up. */
