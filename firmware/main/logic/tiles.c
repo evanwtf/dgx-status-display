@@ -138,6 +138,26 @@ void fmt_uptime_tile(double up_s, char *value, size_t vcap, char *unit, size_t u
     snprintf(unit, ucap, "%s", u);
 }
 
+/* v / full_scale clamped to 0..1; -1 (no fill) when either is unknown. */
+static float level(float v, float full_scale)
+{
+    if (!isfinite(v) || !isfinite(full_scale) || full_scale <= 0) {
+        return -1.0f;
+    }
+    float f = v / full_scale;
+    return f < 0 ? 0.0f : (f > 1 ? 1.0f : f);
+}
+
+static hue_t tone_hue(tone_t t)
+{
+    switch (t) {
+    case TONE_AMBER: return HUE_WARM;
+    case TONE_RED: return HUE_HOT;
+    case TONE_NEUTRAL: break;
+    }
+    return HUE_COOL;
+}
+
 static void num(tile_t *t, const char *label, float v, int decimals, tier_t tier,
                 const char *unit, metric_t m)
 {
@@ -146,7 +166,15 @@ static void num(tile_t *t, const char *label, float v, int decimals, tier_t tier
     snprintf(t->unit, sizeof(t->unit), "%s", unit);
     t->tier = tier;
     t->tone = tone_for(m, v);
+    t->hue = m == METRIC_NONE ? HUE_BRONZE : tone_hue(t->tone);
+    t->fill = -1.0f;
     t->is_text = false;
+}
+
+static void with_level(tile_t *t, hue_t hue, float v, float full_scale)
+{
+    t->hue = hue;
+    t->fill = level(v, full_scale);
 }
 
 /* A short lowercase name fits the 66 px tier; anything else uses 36 px. */
@@ -169,9 +197,11 @@ static bool fits_mid_tier(const char *s)
 
 static void occupant(tile_t *t, const status_frame_t *f)
 {
-    t->label = "On GPU";
+    t->label = "Running";
     t->unit[0] = '\0';
     t->tone = TONE_NEUTRAL;
+    t->hue = HUE_BRONZE;
+    t->fill = -1.0f;
     if (f->occ[0] == '\0') {
         snprintf(t->value, sizeof(t->value), "%s", FMT_DASH);
         t->tier = TIER_M;
@@ -188,32 +218,41 @@ void page_tiles(page_id_t p, const status_frame_t *f, tile_t out[TILES_PER_PAGE]
     memset(out, 0, sizeof(tile_t) * TILES_PER_PAGE);
     switch (p) {
     case PAGE_GPU:
-        num(&out[0], "GPU util", f->gpu_pct, 0, TIER_XL, "%", METRIC_NONE);
-        num(&out[1], "GPU power", f->gpu_w, 0, TIER_XL, "W", METRIC_NONE);
-        num(&out[2], "GPU temp", f->gpu_c, 0, TIER_XL, FMT_DEG "C", METRIC_GPU_C);
+        num(&out[0], "Usage", f->gpu_pct, 0, TIER_XL, "%", METRIC_NONE);
+        with_level(&out[0], HUE_TEAL, f->gpu_pct, 100.0f);
+        num(&out[1], "Power", f->gpu_w, 0, TIER_XL, "W", METRIC_NONE);
+        with_level(&out[1], HUE_INDIGO, f->gpu_w, POWER_FULL_SCALE_W);
+        num(&out[2], "Temp", f->gpu_c, 0, TIER_XL, FMT_DEG "C", METRIC_GPU_C);
         occupant(&out[3], f);
         break;
-    case PAGE_COOLING:
-        out[0].label = "Fan 0";
-        out[1].label = "Fan 1";
-        fmt_krpm(out[0].value, sizeof(out[0].value), f->fan0_rpm);
-        fmt_krpm(out[1].value, sizeof(out[1].value), f->fan1_rpm);
+    case PAGE_COOLING: {
+        const float rpm[2] = {f->fan0_rpm, f->fan1_rpm};
+        out[0].label = "Fan 1";
+        out[1].label = "Fan 2";
         for (int i = 0; i < 2; i++) {
+            fmt_krpm(out[i].value, sizeof(out[i].value), rpm[i]);
             snprintf(out[i].unit, sizeof(out[i].unit), "kRPM");
             out[i].tier = TIER_L;
+            with_level(&out[i], HUE_VIOLET, rpm[i], FAN_FULL_SCALE_RPM);
         }
         num(&out[2], "Board", f->board_c, 0, TIER_XL, FMT_DEG "C", METRIC_BOARD_C);
-        num(&out[3], "NVMe", f->nvme_c, 0, TIER_XL, FMT_DEG "C", METRIC_NVME_C);
+        num(&out[3], "SSD", f->nvme_c, 0, TIER_XL, FMT_DEG "C", METRIC_NVME_C);
         break;
+    }
     case PAGE_HOST: {
         num(&out[0], "CPU", f->cpu_pct, 0, TIER_XL, "%", METRIC_NONE);
+        with_level(&out[0], HUE_TEAL, f->cpu_pct, 100.0f);
         char total[16];
         fmt_fixed(total, sizeof(total), f->mem_total_gib, 0, 4);
         num(&out[1], "Memory", f->mem_used_gib, 1, TIER_M, "", METRIC_NONE);
         snprintf(out[1].unit, sizeof(out[1].unit), "/ %s GiB", total);
-        num(&out[2], "Load 1m", f->load1, 2, TIER_M, "", METRIC_NONE);
-        out[3].label = "Uptime";
+        with_level(&out[1], HUE_INDIGO, f->mem_used_gib, f->mem_total_gib);
+        /* No CPU count in the frame, so no full scale: no fill. */
+        num(&out[2], "Load avg", f->load1, 2, TIER_M, "", METRIC_NONE);
+        out[3].label = "Up";
         out[3].tier = TIER_XL;
+        out[3].hue = HUE_BRONZE;
+        out[3].fill = -1.0f;
         fmt_uptime_tile(f->up_s, out[3].value, sizeof(out[3].value), out[3].unit,
                         sizeof(out[3].unit));
         break;

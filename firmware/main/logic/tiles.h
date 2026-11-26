@@ -17,12 +17,17 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "palette.h"
 #include "status.h"
 
 #define PAGE_COUNT 3
 #define TILES_PER_PAGE 4
 #define TILE_VALUE_MAX (STATUS_OCC_MAX + 1)
 #define TILE_UNIT_MAX 24
+/* The level fill's full scale for power. Provisional: the GB10's GPU stays
+ * well under it in practice; raise it if a reading clips. */
+#define POWER_FULL_SCALE_W 240.0f
+#define FAN_FULL_SCALE_RPM 13500.0f
 
 typedef enum { PAGE_GPU = 0, PAGE_COOLING, PAGE_HOST } page_id_t;
 
@@ -61,6 +66,8 @@ typedef struct {
     char unit[TILE_UNIT_MAX];
     tier_t tier;
     tone_t tone;
+    hue_t hue;    /* the tile's colors; temperatures follow their tone */
+    float fill;   /* level fill, 0..1 of the tile height; < 0 = no fill */
     bool is_text; /* a name, not a number: left-aligned, may change size */
 } tile_t;
 

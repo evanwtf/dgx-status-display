@@ -13,6 +13,7 @@
 #include "carousel.h"
 #include "fmt.h"
 #include "line_reader.h"
+#include "palette.h"
 #include "link_state.h"
 #include "report.h"
 #include "status.h"
@@ -433,30 +434,30 @@ static void test_page_tiles_real_frame(void)
     tile_t t[TILES_PER_PAGE];
 
     page_tiles(PAGE_GPU, &f, t);
-    CHECK_STR(t[0].label, "GPU util");
+    CHECK_STR(t[0].label, "Usage");
     CHECK_STR(t[0].value, "0");
     CHECK_STR(t[0].unit, "%");
     CHECK(t[0].tier == TIER_XL);
-    CHECK_STR(t[1].label, "GPU power");
+    CHECK_STR(t[1].label, "Power");
     CHECK_STR(t[1].value, "4");
     CHECK_STR(t[1].unit, "W");
-    CHECK_STR(t[2].label, "GPU temp");
+    CHECK_STR(t[2].label, "Temp");
     CHECK_STR(t[2].value, "44");
     CHECK_STR(t[2].unit, FMT_DEG "C");
     CHECK(t[2].tone == TONE_NEUTRAL);
-    CHECK_STR(t[3].label, "On GPU");
+    CHECK_STR(t[3].label, "Running");
     CHECK_STR(t[3].value, "idle");
     CHECK(t[3].is_text && t[3].tier == TIER_M);
 
     page_tiles(PAGE_COOLING, &f, t);
-    CHECK_STR(t[0].label, "Fan 0");
+    CHECK_STR(t[0].label, "Fan 1");
     CHECK_STR(t[0].value, "2.8"); /* 2790 */
     CHECK_STR(t[0].unit, "kRPM");
     CHECK(t[0].tier == TIER_L);
     CHECK_STR(t[1].value, "4.2"); /* 4185 */
     CHECK_STR(t[2].label, "Board");
     CHECK_STR(t[2].value, "46"); /* 45.8 */
-    CHECK_STR(t[3].label, "NVMe");
+    CHECK_STR(t[3].label, "SSD");
     CHECK_STR(t[3].value, "45"); /* 44.9 */
 
     page_tiles(PAGE_HOST, &f, t);
@@ -466,9 +467,9 @@ static void test_page_tiles_real_frame(void)
     CHECK_STR(t[1].value, "7.2");
     CHECK_STR(t[1].unit, "/ 122 GiB");
     CHECK(t[1].tier == TIER_M);
-    CHECK_STR(t[2].label, "Load 1m");
+    CHECK_STR(t[2].label, "Load avg");
     CHECK_STR(t[2].value, "0.35");
-    CHECK_STR(t[3].label, "Uptime");
+    CHECK_STR(t[3].label, "Up");
     CHECK_STR(t[3].value, "14");
     CHECK_STR(t[3].unit, "days");
 
@@ -628,6 +629,123 @@ static void test_report_hello(void)
     CHECK_STR(b, "");
 }
 
+static void test_tile_colors_and_levels(void)
+{
+    status_frame_t f;
+    CHECK(parse(REAL, &f) == FRAME_OK);
+    tile_t t[TILES_PER_PAGE];
+
+    page_tiles(PAGE_GPU, &f, t);
+    CHECK(t[0].hue == HUE_TEAL);
+    CHECK_NEAR(t[0].fill, 0.0f); /* 0 % */
+    CHECK(t[1].hue == HUE_INDIGO);
+    CHECK_NEAR(t[1].fill, 4.0f / POWER_FULL_SCALE_W);
+    CHECK(t[2].hue == HUE_COOL && t[2].fill < 0); /* temps: hue, no fill */
+    CHECK(t[3].hue == HUE_BRONZE && t[3].fill < 0);
+
+    page_tiles(PAGE_COOLING, &f, t);
+    CHECK(t[0].hue == HUE_VIOLET && t[1].hue == HUE_VIOLET);
+    CHECK_NEAR(t[0].fill, 2790.0f / FAN_FULL_SCALE_RPM);
+
+    page_tiles(PAGE_HOST, &f, t);
+    CHECK(t[0].hue == HUE_TEAL);
+    CHECK_NEAR(t[1].fill, 7.2f / 121.7f);
+    CHECK(t[2].hue == HUE_BRONZE && t[2].fill < 0); /* load: no CPU count */
+    CHECK(t[3].hue == HUE_BRONZE && t[3].fill < 0);
+
+    /* Temperature hue follows the threshold table; fills clamp to 0..1. */
+    f.gpu_c = 85;
+    f.board_c = 82;
+    f.nvme_c = 69.9f;
+    f.gpu_w = 400;
+    f.fan1_rpm = 20000;
+    f.gpu_pct = NAN;
+    page_tiles(PAGE_GPU, &f, t);
+    CHECK(t[2].hue == HUE_WARM);
+    CHECK_NEAR(t[1].fill, 1.0f);
+    CHECK(t[0].fill < 0); /* unknown: no fill, not an empty one */
+    f.gpu_c = 92;
+    page_tiles(PAGE_GPU, &f, t);
+    CHECK(t[2].hue == HUE_HOT);
+    page_tiles(PAGE_COOLING, &f, t);
+    CHECK(t[2].hue == HUE_HOT);
+    CHECK(t[3].hue == HUE_COOL);
+    CHECK_NEAR(t[1].fill, 1.0f);
+    CHECK(hue_colors(HUE_WARM)->edge != 0 && hue_colors(HUE_HOT)->edge != 0);
+    CHECK(hue_colors(HUE_COOL)->edge == 0);
+}
+
+/* WCAG 2 relative luminance and contrast ratio. */
+static double channel(uint32_t c8)
+{
+    double c = (double)c8 / 255.0;
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+
+static double luminance(uint32_t rgb)
+{
+    return 0.2126 * channel((rgb >> 16) & 0xFF) + 0.7152 * channel((rgb >> 8) & 0xFF) +
+           0.0722 * channel(rgb & 0xFF);
+}
+
+static double contrast(uint32_t a, uint32_t b)
+{
+    double la = luminance(a), lb = luminance(b);
+    double hi = la > lb ? la : lb, lo = la > lb ? lb : la;
+    return (hi + 0.05) / (lo + 0.05);
+}
+
+static double g_worst_value = 99, g_worst_label = 99;
+static char g_worst_value_pair[64], g_worst_label_pair[64];
+
+static void check_pair(const char *what, uint32_t fg, uint32_t bg, double min, bool is_value)
+{
+    double r = contrast(fg, bg);
+    g_checks++;
+    if (r < min) {
+        g_failed++;
+        fprintf(stderr, "FAIL contrast %s: #%06X on #%06X is %.2f:1, needs %.1f:1\n", what,
+                (unsigned)fg, (unsigned)bg, r, min);
+    }
+    double *worst = is_value ? &g_worst_value : &g_worst_label;
+    char *pair = is_value ? g_worst_value_pair : g_worst_label_pair;
+    if (r < *worst) {
+        *worst = r;
+        snprintf(pair, 64, "%s #%06X on #%06X", what, (unsigned)fg, (unsigned)bg);
+    }
+}
+
+static void test_contrast(void)
+{
+    static const char *const names[HUE_COUNT] = {"teal",   "indigo", "violet", "bronze",
+                                                 "cool",   "warm",   "hot"};
+    for (int h = 0; h < HUE_COUNT; h++) {
+        const hue_colors_t *c = hue_colors((hue_t)h);
+        /* A value or a label can sit over the base, the fill or the line. */
+        const uint32_t grounds[3] = {c->base, c->fill, c->line};
+        for (int g = 0; g < 3; g++) {
+            char what[48];
+            snprintf(what, sizeof(what), "value on %s %d", names[h], g);
+            check_pair(what, COLOR_VALUE, grounds[g], 7.0, true);
+            snprintf(what, sizeof(what), "label on %s %d", names[h], g);
+            check_pair(what, c->tint, grounds[g], 4.5, false);
+        }
+        /* Each step up must be visible: fill over base, line over fill. */
+        CHECK(luminance(c->fill) > luminance(c->base));
+        CHECK(luminance(c->line) > luminance(c->fill));
+    }
+    /* Text on the black ground: strip, NO DATA page, detail page. */
+    check_pair("title", COLOR_TITLE, COLOR_GROUND, 4.5, false);
+    check_pair("clock", COLOR_CLOCK, COLOR_GROUND, 4.5, false);
+    check_pair("stale", COLOR_STALE, COLOR_GROUND, 4.5, false);
+    check_pair("no data head", COLOR_NO_DATA_HEAD, COLOR_GROUND, 4.5, false);
+    check_pair("text", COLOR_TEXT, COLOR_GROUND, 4.5, false);
+    check_pair("muted text", COLOR_TEXT_MUTED, COLOR_GROUND, 4.5, false);
+    check_pair("no data age", COLOR_VALUE, COLOR_GROUND, 7.0, true);
+    printf("contrast: worst value %.2f:1 (%s); worst label %.2f:1 (%s)\n", g_worst_value,
+           g_worst_value_pair, g_worst_label, g_worst_label_pair);
+}
+
 int main(void)
 {
     test_parse_real_frame();
@@ -650,6 +768,8 @@ int main(void)
     test_page_tiles_busy_and_missing();
     test_carousel();
     test_report_hello();
+    test_tile_colors_and_levels();
+    test_contrast();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }
