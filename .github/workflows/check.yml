@@ -1,0 +1,65 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    # Self-hosted runner: run a pull request only from a branch in this repo.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      # Shared runner: scope the uv cache to this run. (The runner context is
+      # not allowed in job-level env, so write it to GITHUB_ENV.)
+      - run: echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@v10
+      - run: uv sync --frozen
+      - name: ruff
+        run: |
+          status=0
+          uv run --frozen ruff format --check . || status=$?
+          uv run --frozen ruff check . || status=$?
+          exit "$status"
+      - run: uv run --frozen mypy
+      # Default run: the NVML integration test skips cleanly (no GPU here).
+      - run: uv run --frozen pytest -q -rs
+      # Every suite CI can run must run. Deselect the ones it cannot, then
+      # fail on any skip in the rest.
+      - name: fail on skipped tests
+        run: |
+          out=$(uv run --frozen pytest -q -rs -m 'not integration and not slow' 2>&1)
+          echo "$out"
+          if echo "$out" | grep -q SKIPPED; then echo "unexpected skip"; exit 1; fi
+
+  firmware:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: echo "UV_CACHE_DIR=$RUNNER_TEMP/uv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - uses: astral-sh/setup-uv@v10
+      - run: uv sync --frozen
+      # Both steps run in the pinned espressif/idf image (scripts/firmware.py
+      # holds the pin) and give the tree back to the runner user afterwards.
+      - name: host unit tests (ASan, UBSan)
+        run: uv run --frozen python scripts/firmware.py test
+      - name: idf.py build
+        run: uv run --frozen python scripts/firmware.py build
+      - name: size
+        run: uv run --frozen python scripts/firmware.py size
+      - name: Upload the firmware images
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ github.sha }}
+          path: |
+            firmware/build/bootloader/bootloader.bin
+            firmware/build/partition_table/partition-table.bin
+            firmware/build/dgx_status_display.bin
+            firmware/build/flash_args
+          if-no-files-found: error
+          retention-days: 3
