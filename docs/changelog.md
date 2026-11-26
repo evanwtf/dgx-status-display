@@ -5,6 +5,11 @@
 New firmware needs the daemon from this version. With an older daemon,
 the Network and Storage pages show dashes.
 
+- Page changes fade through black: the panel brightness falls to 0 in
+  150 ms on a quadratic curve, the new view is drawn whole at 0, and the
+  level rises again in 150 ms. The 10 s dwell starts after the fade-in.
+  Taps, the detail page and a KEY rotation fade too; NO DATA does not. The
+  `free:` line reports the last transition's time.
 - LLM page: Output and Prompt tok/s, Requests running and KV cache %, from
   the local LLM metrics exporter, in a slate family. The carousel skips it
   while no engine is up; an exporter the daemon cannot read shows dashes.

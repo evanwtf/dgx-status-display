@@ -23,6 +23,7 @@ idf_component_register(
         "logic/burnin.c"
         "logic/tiles.c"
         "logic/carousel.c"
+        "logic/transition.c"
         "logic/report.c"
         "logic/palette.c"
         "logic/history.c"

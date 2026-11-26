@@ -26,6 +26,12 @@
 #define BRIGHTNESS_IDLE 70
 #define BRIGHTNESS_NO_DATA 60 /* 30 was too dim to read NO DATA on the panel */
 
+/* Page changes fade through black with the panel brightness (transition.h):
+ * out to 0, redraw at 0, back in. Added to the dwell, never taken from it. */
+#define FADE_OUT_MS 150
+#define FADE_IN_MS 150
+#define FADE_STEP_MS 10
+
 typedef struct {
     int8_t dx;
     int8_t dy;

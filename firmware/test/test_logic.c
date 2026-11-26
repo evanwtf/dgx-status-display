@@ -12,6 +12,7 @@
 #include "burnin.h"
 #include "button.h"
 #include "carousel.h"
+#include "transition.h"
 #include "co5300.h"
 #include "fmt.h"
 #include "history.h"
@@ -714,6 +715,287 @@ static void test_carousel_hidden_pages(void)
     carousel_long_press(&c, 100600);
     carousel_set_hidden(&c, PAGE_LLM, true, 100700);
     CHECK(carousel_view(&c) == VIEW_DETAIL && c.page == PAGE_GPU);
+}
+
+/* Live from the first frame: GPU page, panel at the LIVE level. */
+static void live_start(carousel_t *c, transition_t *t, int64_t t0)
+{
+    carousel_init(c, t0);
+    transition_init(t, c);
+    carousel_tick(c, LINK_LIVE, t0);
+    tr_out_t o = transition_tick(t, c, BRIGHTNESS_LIVE, t0);
+    CHECK(o.swap && o.level == BRIGHTNESS_LIVE); /* NO DATA out: at once */
+    CHECK(t->shown_kind == VIEW_PAGE && t->shown_page == PAGE_GPU && !transition_busy(t));
+}
+
+/* Step the carousel and the transition at `now`. */
+static tr_out_t step(carousel_t *c, transition_t *t, int64_t now, uint8_t target)
+{
+    carousel_tick(c, LINK_LIVE, now);
+    return transition_tick(t, c, target, now);
+}
+
+/* Run a whole fade from its first step at `start`: returns the time the
+ * fade-in ended. The redraw at 0 takes `redraw` ms. */
+static int64_t run_fade(carousel_t *c, transition_t *t, int64_t start, int64_t redraw)
+{
+    int64_t now = start;
+    tr_out_t o = step(c, t, now, BRIGHTNESS_LIVE);
+    while (!o.swap) {
+        now += FADE_STEP_MS;
+        o = step(c, t, now, BRIGHTNESS_LIVE);
+    }
+    CHECK(o.level == 0 && t->phase == TR_DARK);
+    now += redraw;
+    transition_swapped(t, (uint32_t)now);
+    do {
+        now += FADE_STEP_MS;
+        o = step(c, t, now, BRIGHTNESS_LIVE);
+    } while (!o.done);
+    CHECK(o.level == BRIGHTNESS_LIVE && !transition_busy(t));
+    return now;
+}
+
+static void test_fade_curve(void)
+{
+    const uint8_t targets[] = {BRIGHTNESS_IDLE, BRIGHTNESS_LIVE, 255, 1, 0};
+    for (size_t k = 0; k < sizeof(targets); k++) {
+        const uint8_t g = targets[k];
+        CHECK(fade_level(g, 0, FADE_OUT_MS, false) == g);
+        CHECK(fade_level(g, FADE_OUT_MS, FADE_OUT_MS, false) == 0);
+        CHECK(fade_level(g, 0, FADE_IN_MS, true) == 0);
+        CHECK(fade_level(g, FADE_IN_MS, FADE_IN_MS, true) == g);
+        CHECK(fade_level(g, FADE_IN_MS + 50, FADE_IN_MS, true) == g);
+        uint8_t prev_out = g, prev_in = 0;
+        for (uint32_t e = 1; e <= FADE_OUT_MS; e++) {
+            const uint8_t lo = fade_level(g, e, FADE_OUT_MS, false);
+            const uint8_t hi = fade_level(g, e, FADE_IN_MS, true);
+            CHECK(lo <= prev_out && hi >= prev_in);
+            prev_out = lo;
+            prev_in = hi;
+        }
+    }
+    /* Quadratic: half way in time is a quarter of the level. */
+    CHECK(fade_level(BRIGHTNESS_LIVE, 75, 150, true) == 28); /* 110/4 = 27.5 */
+    CHECK(fade_level(BRIGHTNESS_LIVE, 75, 150, false) == 28);
+}
+
+static void test_fade_timeline(void)
+{
+    carousel_t c;
+    transition_t t;
+    live_start(&c, &t, 0);
+    /* The whole dwell at full level, nothing moving. */
+    for (int64_t now = 250; now < CAROUSEL_PAGE_MS; now += 250) {
+        tr_out_t o = step(&c, &t, now, BRIGHTNESS_LIVE);
+        CHECK(o.level == BRIGHTNESS_LIVE && !o.swap && !transition_busy(&t));
+    }
+    /* Dwell over: the carousel moves, the panel still shows GPU, fading. */
+    int64_t now = CAROUSEL_PAGE_MS;
+    tr_out_t o = step(&c, &t, now, BRIGHTNESS_LIVE);
+    CHECK(c.page == PAGE_COOLING && t.shown_page == PAGE_GPU && t.phase == TR_OUT);
+    CHECK(o.level == BRIGHTNESS_LIVE && !o.swap);
+    uint8_t prev = o.level;
+    for (now += FADE_STEP_MS; now < CAROUSEL_PAGE_MS + FADE_OUT_MS; now += FADE_STEP_MS) {
+        o = step(&c, &t, now, BRIGHTNESS_LIVE);
+        /* Falls every step until the curve's tail rounds to 0. */
+        CHECK((o.level < prev || o.level == 0) && !o.swap && t.shown_page == PAGE_GPU);
+        prev = o.level;
+    }
+    /* 150 ms: dark. The new page is the shown one; the caller redraws. */
+    o = step(&c, &t, now, BRIGHTNESS_LIVE);
+    CHECK(o.swap && o.level == 0 && t.phase == TR_DARK && t.shown_page == PAGE_COOLING);
+    const int64_t redraw = 37;
+    now += redraw;
+    transition_swapped(&t, (uint32_t)now);
+    const int64_t in_start = now;
+    prev = 0;
+    for (now += FADE_STEP_MS; now < in_start + FADE_IN_MS; now += FADE_STEP_MS) {
+        o = step(&c, &t, now, BRIGHTNESS_LIVE);
+        CHECK((o.level > prev || prev == 0) && o.level < BRIGHTNESS_LIVE && !o.done);
+        prev = o.level;
+    }
+    o = step(&c, &t, now, BRIGHTNESS_LIVE);
+    CHECK(o.done && o.level == BRIGHTNESS_LIVE && t.phase == TR_IDLE);
+    CHECK(t.last_ms == FADE_OUT_MS + redraw + FADE_IN_MS);
+    /* The next dwell is a full CAROUSEL_PAGE_MS from the end of the fade. */
+    const int64_t end = now;
+    CHECK(c.page_since_ms == end);
+    o = step(&c, &t, end + CAROUSEL_PAGE_MS - 1, BRIGHTNESS_LIVE);
+    CHECK(c.page == PAGE_COOLING && !transition_busy(&t));
+    o = step(&c, &t, end + CAROUSEL_PAGE_MS, BRIGHTNESS_LIVE);
+    CHECK(c.page == PAGE_HOST && t.phase == TR_OUT);
+    /* And that one runs the same way: one page per dwell + fade. */
+    const int64_t end2 = run_fade(&c, &t, end + CAROUSEL_PAGE_MS, 37);
+    CHECK(end2 - end == CAROUSEL_PAGE_MS + FADE_OUT_MS + 37 + FADE_IN_MS);
+    CHECK(t.shown_page == PAGE_HOST);
+}
+
+static void test_fade_target_changes(void)
+{
+    carousel_t c;
+    transition_t t;
+    live_start(&c, &t, 0);
+    carousel_tap(&c, 100);
+    tr_out_t o = transition_tick(&t, &c, BRIGHTNESS_LIVE, 100);
+    o = transition_tick(&t, &c, BRIGHTNESS_IDLE, 175); /* the idle dim starts */
+    CHECK(o.level == fade_level(BRIGHTNESS_IDLE, 75, FADE_OUT_MS, false));
+    o = transition_tick(&t, &c, BRIGHTNESS_IDLE, 250);
+    CHECK(o.swap);
+    transition_swapped(&t, 260);
+    o = transition_tick(&t, &c, BRIGHTNESS_LIVE, 300);
+    CHECK(o.level == fade_level(BRIGHTNESS_LIVE, 40, FADE_IN_MS, true));
+    o = transition_tick(&t, &c, BRIGHTNESS_IDLE, 410);
+    CHECK(o.done && o.level == BRIGHTNESS_IDLE); /* ends on the new target */
+
+    /* NO DATA during a fade: at once, at the NO DATA level, no fade. */
+    carousel_tap(&c, 1000);
+    transition_tick(&t, &c, BRIGHTNESS_LIVE, 1000);
+    transition_tick(&t, &c, BRIGHTNESS_LIVE, 1050);
+    CHECK(t.phase == TR_OUT);
+    carousel_tick(&c, LINK_NO_DATA, 1060);
+    o = transition_tick(&t, &c, BRIGHTNESS_NO_DATA, 1060);
+    CHECK(o.swap && o.level == BRIGHTNESS_NO_DATA && t.shown_kind == VIEW_NO_DATA);
+    CHECK(!transition_busy(&t));
+    /* And back: at once too. */
+    carousel_tick(&c, LINK_LIVE, 1070);
+    o = transition_tick(&t, &c, BRIGHTNESS_LIVE, 1070);
+    CHECK(o.swap && o.level == BRIGHTNESS_LIVE && t.shown_kind == VIEW_PAGE);
+    CHECK(!transition_busy(&t));
+}
+
+static void test_fade_taps(void)
+{
+    carousel_t c;
+    transition_t t;
+    live_start(&c, &t, 0);
+    /* Idle: the tap moves the carousel now, and the fade starts. */
+    transition_tap(&t, &c, 100);
+    CHECK(c.page == PAGE_COOLING && t.queued == TR_ACT_NONE);
+    step(&c, &t, 100, BRIGHTNESS_LIVE);
+    CHECK(t.phase == TR_OUT && t.shown_page == PAGE_GPU);
+    /* During the fade out: queued, the carousel does not move. */
+    transition_tap(&t, &c, 150);
+    CHECK(c.page == PAGE_COOLING && t.queued == TR_ACT_TAP);
+    /* A second tap is dropped: never more than one. */
+    transition_tap(&t, &c, 160);
+    transition_long_press(&t, &c, 170);
+    CHECK(t.queued == TR_ACT_TAP && c.page == PAGE_COOLING);
+    /* Dark: still queued. */
+    tr_out_t o = step(&c, &t, 250, BRIGHTNESS_LIVE);
+    CHECK(o.swap && t.shown_page == PAGE_COOLING);
+    transition_tap(&t, &c, 255);
+    transition_swapped(&t, 260);
+    /* Fade in: still one. */
+    transition_tap(&t, &c, 300);
+    CHECK(t.queued == TR_ACT_TAP && c.page == PAGE_COOLING);
+    o = step(&c, &t, 410, BRIGHTNESS_LIVE);
+    /* The queued tap runs when the fade-in ends, then fades on its own. */
+    CHECK(o.done && c.page == PAGE_HOST && t.queued == TR_ACT_NONE);
+    CHECK(t.shown_page == PAGE_COOLING);
+    o = step(&c, &t, 420, BRIGHTNESS_LIVE);
+    CHECK(t.phase == TR_OUT);
+    const int64_t end = run_fade(&c, &t, 420, 30);
+    CHECK(t.shown_page == PAGE_HOST && c.page == PAGE_HOST);
+    /* Nothing else was queued: the dwell runs. */
+    o = step(&c, &t, end + 1000, BRIGHTNESS_LIVE);
+    CHECK(!transition_busy(&t) && c.page == PAGE_HOST);
+
+    /* Long press: the detail page fades in, and out again on a tap. */
+    transition_long_press(&t, &c, end + 2000);
+    run_fade(&c, &t, end + 2000, 30);
+    CHECK(t.shown_kind == VIEW_DETAIL && c.detail);
+    /* The detail timeout restarts when the fade-in ends. */
+    CHECK(c.detail_since_ms > end + 2000 + FADE_OUT_MS);
+    transition_tap(&t, &c, end + 5000);
+    run_fade(&c, &t, end + 5000, 30);
+    CHECK(t.shown_kind == VIEW_PAGE && t.shown_page == PAGE_HOST);
+    /* A long press queued during a fade opens the detail afterwards. */
+    transition_tap(&t, &c, end + 6000);
+    step(&c, &t, end + 6000, BRIGHTNESS_LIVE);
+    transition_long_press(&t, &c, end + 6010);
+    const int64_t e2 = run_fade(&c, &t, end + 6010, 30);
+    CHECK(c.detail && t.shown_kind == VIEW_PAGE); /* opened, not shown yet */
+    run_fade(&c, &t, e2 + FADE_STEP_MS, 30);
+    CHECK(t.shown_kind == VIEW_DETAIL);
+}
+
+static void test_fade_skip_and_hide(void)
+{
+    carousel_t c;
+    transition_t t;
+    live_start(&c, &t, 0);
+    /* Fading from Storage to LLM; the engine stops mid-fade. */
+    c.page = PAGE_STORAGE;
+    t.shown_page = PAGE_STORAGE;
+    transition_tap(&t, &c, 100);
+    CHECK(c.page == PAGE_LLM);
+    step(&c, &t, 100, BRIGHTNESS_LIVE);
+    carousel_set_hidden(&c, PAGE_LLM, true, 150);
+    CHECK(c.page == PAGE_GPU);
+    tr_out_t o = step(&c, &t, 250, BRIGHTNESS_LIVE);
+    CHECK(o.swap && t.shown_page == PAGE_GPU); /* LLM never shows */
+    transition_swapped(&t, 260);
+    o = step(&c, &t, 410, BRIGHTNESS_LIVE);
+    CHECK(o.done && !transition_busy(&t));
+
+    /* Hidden while it fades in: one more fade, to the next page. */
+    carousel_set_hidden(&c, PAGE_LLM, false, 500);
+    c.page = PAGE_STORAGE;
+    t.shown_page = PAGE_STORAGE;
+    transition_tap(&t, &c, 1000);
+    const int64_t mid = 1000;
+    o = step(&c, &t, mid, BRIGHTNESS_LIVE);
+    o = step(&c, &t, mid + FADE_OUT_MS, BRIGHTNESS_LIVE);
+    CHECK(o.swap && t.shown_page == PAGE_LLM);
+    transition_swapped(&t, mid + FADE_OUT_MS + 10);
+    carousel_set_hidden(&c, PAGE_LLM, true, mid + FADE_OUT_MS + 50);
+    CHECK(c.page == PAGE_GPU && t.shown_page == PAGE_LLM);
+    o = step(&c, &t, mid + FADE_OUT_MS + 10 + FADE_IN_MS, BRIGHTNESS_LIVE);
+    CHECK(o.done);
+    run_fade(&c, &t, mid + FADE_OUT_MS + 10 + FADE_IN_MS + FADE_STEP_MS, 30);
+    CHECK(t.shown_page == PAGE_GPU);
+}
+
+static void test_fade_turn(void)
+{
+    carousel_t c;
+    transition_t t;
+    live_start(&c, &t, 0);
+    transition_turn(&t);
+    tr_out_t o = step(&c, &t, 100, BRIGHTNESS_LIVE);
+    CHECK(t.phase == TR_OUT && !o.swap && c.page == PAGE_GPU);
+    o = step(&c, &t, 250, BRIGHTNESS_LIVE);
+    CHECK(o.swap && o.level == 0 && t.turn); /* apply the turn now, at 0 */
+    transition_swapped(&t, 260);
+    CHECK(!t.turn);
+    o = step(&c, &t, 410, BRIGHTNESS_LIVE);
+    CHECK(o.done && t.shown_page == PAGE_GPU);
+    /* In NO DATA: at once, nothing to hide. */
+    carousel_tick(&c, LINK_NO_DATA, 500);
+    transition_tick(&t, &c, BRIGHTNESS_NO_DATA, 500);
+    transition_turn(&t);
+    o = transition_tick(&t, &c, BRIGHTNESS_NO_DATA, 510);
+    CHECK(o.swap && o.level == BRIGHTNESS_NO_DATA && !t.turn && !transition_busy(&t));
+}
+
+static void test_fade_clock_wraps(void)
+{
+    carousel_t c;
+    transition_t t;
+    const int64_t base = (int64_t)UINT32_MAX - 200; /* the ms clock passes 2^32 */
+    live_start(&c, &t, base);
+    transition_tap(&t, &c, base + 100);
+    tr_out_t o = step(&c, &t, base + 100, BRIGHTNESS_LIVE);
+    o = step(&c, &t, base + 175, BRIGHTNESS_LIVE); /* uint32 wrapped here */
+    CHECK(o.level == fade_level(BRIGHTNESS_LIVE, 75, FADE_OUT_MS, false));
+    o = step(&c, &t, base + 250, BRIGHTNESS_LIVE);
+    CHECK(o.swap);
+    transition_swapped(&t, (uint32_t)(base + 260));
+    o = step(&c, &t, base + 335, BRIGHTNESS_LIVE);
+    CHECK(o.level == fade_level(BRIGHTNESS_LIVE, 75, FADE_IN_MS, true));
+    o = step(&c, &t, base + 410, BRIGHTNESS_LIVE);
+    CHECK(o.done && t.last_ms == 310 && c.page_since_ms == base + 410);
 }
 
 static void test_report_hello(void)
@@ -1594,6 +1876,13 @@ int main(void)
     test_page_tiles_busy_and_missing();
     test_carousel();
     test_carousel_hidden_pages();
+    test_fade_curve();
+    test_fade_timeline();
+    test_fade_target_changes();
+    test_fade_taps();
+    test_fade_skip_and_hide();
+    test_fade_turn();
+    test_fade_clock_wraps();
     test_report_hello();
     test_tile_colors_and_levels();
     test_contrast();

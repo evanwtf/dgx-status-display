@@ -19,6 +19,8 @@
 #include "logic/carousel.h"
 #include "logic/co5300.h"
 #include "logic/link_state.h"
+#include "logic/tiles.h"
+#include "logic/transition.h"
 #include "serial_rx.h"
 #include "settings_nvs.h"
 #include "view.h"
@@ -29,6 +31,11 @@
 static const char *TAG = "ui";
 
 static carousel_t s_carousel;
+static transition_t s_tr;
+static lv_timer_t *s_fade_timer;
+static link_state_t s_link = LINK_NO_DATA;
+static uint32_t s_redraw_ms;    /* the last redraw at 0 */
+static bool s_fade_logged;
 static bool s_first_refresh_done;
 static int s_applied_brightness = -1;
 static int64_t s_last_change_ms;
@@ -59,9 +66,14 @@ static void apply_turn(void)
     if (!display_can_rotate()) {
         return;
     }
-    lv_display_set_rotation(lv_display_get_default(),
-                            (lv_display_rotation_t)lrot_for_cw_turns((int)s_turn));
+    lv_display_t *d = lv_display_get_default();
+    const lv_display_rotation_t r = (lv_display_rotation_t)lrot_for_cw_turns((int)s_turn);
+    if (lv_display_get_rotation(d) != r) {
+        lv_display_set_rotation(d, r);
+    }
 }
+
+static void transition_step(int64_t now);
 
 /* KEY, short press: turn the screen 90 degrees clockwise and store it. Runs
  * in the LVGL task (the buttons timer). */
@@ -72,15 +84,17 @@ static void on_key_short(void)
         return;
     }
     s_turn = settings_turn_cw(settings_nvs_turn_store(), s_turn);
-    apply_turn();
+    transition_turn(&s_tr); /* applied at the dark moment of a fade */
     s_last_change_ms = now_ms();
+    transition_step(now_ms());
     ESP_LOGI(TAG, "rotation: %d deg", turn_degrees(s_turn));
 }
 
 static void on_tap(void)
 {
-    carousel_tap(&s_carousel, now_ms());
+    transition_tap(&s_tr, &s_carousel, now_ms());
     s_last_change_ms = now_ms();
+    transition_step(now_ms());
 }
 
 /* The "Charts" row on the detail page: switch, store, keep the page open. */
@@ -94,8 +108,9 @@ static void on_chart_toggle(void)
 
 static void on_long_press(void)
 {
-    carousel_long_press(&s_carousel, now_ms());
+    transition_long_press(&s_tr, &s_carousel, now_ms());
     s_last_change_ms = now_ms();
+    transition_step(now_ms());
 }
 
 /* LVGL sends REFR_READY after a refresh has been flushed to the panel. */
@@ -166,13 +181,79 @@ static void log_stack(int64_t now)
     ESP_LOG_LEVEL(level, TAG,
                   "free: stack rx %lu B, lvgl %lu B; lv heap %u%% used, largest %lu B; "
                   "heap %lu B, min %lu B; slowest refresh %lu ms; turn %d; "
-                  "pwr hold power-off %s",
+                  "last fade %lu ms (redraw %lu ms); pwr hold power-off %s",
                   (unsigned long)rx, (unsigned long)s_lvgl_stack_free, (unsigned)mon.used_pct,
                   (unsigned long)mon.free_biggest_size, (unsigned long)esp_get_free_heap_size(),
                   (unsigned long)esp_get_minimum_free_heap_size(),
                   (unsigned long)s_refr_max_ms, turn_degrees(s_turn),
+                  (unsigned long)s_tr.last_ms, (unsigned long)s_redraw_ms,
                   axp2101_key_poweroff_state());
     s_refr_max_ms = 0;
+}
+
+static void render(int64_t now);
+
+static void apply_shift(int64_t now)
+{
+    shift_t sh = burnin_shift(now);
+    if (sh.dx != s_last_shift.dx || sh.dy != s_last_shift.dy) {
+        view_set_shift(sh.dx, sh.dy);
+        s_last_shift = sh;
+    }
+}
+
+static void set_brightness(uint8_t level)
+{
+    /* No brightness before the first frame reaches the panel: the panel
+     * starts at 0 (display.c), so nothing flashes. 0x51 goes through
+     * esp_lcd_panel_io_tx_param(), which waits for every queued color
+     * transaction first (esp_lcd_panel_io_spi.c, IDF v5.5.6, lines 216-224). */
+    if (s_first_refresh_done && level != s_applied_brightness) {
+        display_set_brightness(level);
+        s_applied_brightness = level;
+    }
+}
+
+/* One fade step: from tick(), touch, KEY, and every FADE_STEP_MS from the
+ * fade timer while a transition runs. All in the LVGL task. */
+static void transition_step(int64_t now)
+{
+    const uint8_t target = burnin_brightness(s_link, now - s_last_change_ms);
+    const tr_out_t o = transition_tick(&s_tr, &s_carousel, target, now);
+    set_brightness(o.level);
+    if (o.swap) {
+        apply_turn();
+        apply_shift(now);
+        render(now);
+        if (s_tr.phase == TR_DARK) {
+            /* The panel is at 0: draw the whole new view now, so no partly
+             * drawn frame is ever lit. */
+            const int64_t t0 = esp_timer_get_time();
+            lv_obj_invalidate(lv_screen_active());
+            lv_refr_now(NULL);
+            s_redraw_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
+            transition_swapped(&s_tr, (uint32_t)now_ms());
+        }
+    }
+    if (o.done && !s_fade_logged) {
+        s_fade_logged = true;
+        ESP_LOGI(TAG, "fade: %lu ms (out %d ms, redraw %lu ms, in %d ms)",
+                 (unsigned long)s_tr.last_ms, FADE_OUT_MS, (unsigned long)s_redraw_ms,
+                 FADE_IN_MS);
+    }
+    if (s_fade_timer) {
+        if (transition_busy(&s_tr)) {
+            lv_timer_resume(s_fade_timer);
+        } else {
+            lv_timer_pause(s_fade_timer);
+        }
+    }
+}
+
+static void fade_tick(lv_timer_t *t)
+{
+    (void)t;
+    transition_step(now_ms());
 }
 
 /* t is NULL only for the first call, from ui_init() in the main task. */
@@ -185,13 +266,14 @@ static void tick(lv_timer_t *t)
     }
     serial_rx_get(&s_rx);
     link_state_t st = link_state(&s_rx.link, now);
+    s_link = st;
     carousel_set_hidden(&s_carousel, PAGE_LLM, page_hidden(PAGE_LLM, &s_rx.frame), now);
     carousel_tick(&s_carousel, st, now);
 
-    shift_t sh = burnin_shift(now);
-    if (sh.dx != s_last_shift.dx || sh.dy != s_last_shift.dy) {
-        view_set_shift(sh.dx, sh.dy);
-        s_last_shift = sh;
+    /* A burn-in step that falls due during a fade waits for the dark
+     * moment (apply_shift() in transition_step). */
+    if (!transition_busy(&s_tr)) {
+        apply_shift(now);
     }
     /* "No change" for the idle dim: no tap, no link-state change, no new GPU
      * occupant. Page turns do not count. */
@@ -203,15 +285,15 @@ static void tick(lv_timer_t *t)
         snprintf(s_last_occ, sizeof(s_last_occ), "%s", s_rx.frame.occ);
         s_last_change_ms = now;
     }
-    /* No brightness before the first frame reaches the panel: the panel
-     * starts at 0 (display.c), so nothing flashes. */
-    int level = burnin_brightness(st, now - s_last_change_ms);
-    if (s_first_refresh_done && level != s_applied_brightness) {
-        display_set_brightness((uint8_t)level);
-        s_applied_brightness = level;
-    }
+    transition_step(now);
+    render(now);
+}
 
-    view_model_fill(&s_model, &s_rx.frame, st, link_age_s(&s_rx.link, now), &s_carousel);
+/* Draw the view the panel shows, which lags the carousel during a fade. */
+static void render(int64_t now)
+{
+    const carousel_t shown = transition_shown(&s_tr, &s_carousel);
+    view_model_fill(&s_model, &s_rx.frame, s_link, link_age_s(&s_rx.link, now), &shown);
     s_model.style = s_style;
     s_model.hist_heights = serial_rx_hist_heights;
     s_model.accepted = s_rx.accepted;
@@ -226,6 +308,7 @@ void ui_init(void)
 {
     int64_t now = now_ms();
     carousel_init(&s_carousel, now);
+    transition_init(&s_tr, &s_carousel);
     s_last_change_ms = now;
     s_style = settings_chart_style(settings_nvs_chart_store());
     s_turn = settings_turn(settings_nvs_turn_store());
@@ -238,5 +321,7 @@ void ui_init(void)
                             NULL);
     tick(NULL);
     lv_timer_create(tick, UI_PERIOD_MS, NULL);
+    s_fade_timer = lv_timer_create(fade_tick, FADE_STEP_MS, NULL);
+    lv_timer_pause(s_fade_timer);
     buttons_start(on_key_short);
 }
