@@ -16,17 +16,19 @@ repos:
     rev: v6.0.0
     hooks:
       - id: check-added-large-files
+        args: [--maxkb=256]
       - id: check-merge-conflict
       - id: check-yaml
       - id: check-toml
       # tests/fixtures/ holds files copied byte for byte from a DGX (/proc,
-      # /sys). A /proc cmdline ends in a NUL, not a newline. These two hooks
-      # rewrite files, so they skip the fixtures. Every checking hook still
-      # sees them.
+      # /sys). A /proc cmdline ends in a NUL, not a newline.
+      # firmware/main/fonts/ is generated (scripts/gen_fonts.py) and must stay
+      # byte-identical to a fresh run. These two hooks rewrite files, so they
+      # skip both. Every checking hook still sees them.
       - id: end-of-file-fixer
-        exclude: ^tests/fixtures/
+        exclude: ^(tests/fixtures/|firmware/main/fonts/)
       - id: trailing-whitespace
-        exclude: ^tests/fixtures/
+        exclude: ^(tests/fixtures/|firmware/main/fonts/)
       - id: detect-private-key
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1

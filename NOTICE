@@ -50,3 +50,14 @@ Dependencies (fetched at build time, not included here)
   upstream fonts are under the SIL Open Font License 1.1.
 - Python: pyserial (BSD), nvidia-ml-py (BSD), as their package metadata
   states.
+
+- firmware/main/fonts/*.c: bitmap fonts generated from JetBrains Mono
+  SemiBold, v2.304, SIL Open Font License 1.1, Copyright 2020 The JetBrains
+  Mono Project Authors (https://github.com/JetBrains/JetBrainsMono).
+  Source: https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip
+  (sha256 6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf;
+  fonts/ttf/JetBrainsMono-SemiBold.ttf, sha256
+  1b3bfa1ed5665a4ce3f9feb68d2d4e40e70bf8b4b7d9a3edd418f321b4e166a0).
+  Converted with lv_font_conv 1.5.3 (MIT). scripts/gen_fonts.py regenerates
+  them byte for byte. The OFL allows embedding the font in software; the
+  bitmaps are a subset of the glyphs and carry no Reserved Font Name.

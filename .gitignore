@@ -20,3 +20,6 @@ backup/
 
 # Local deny list for scripts/check_public.py. Never commit it.
 /.public-denylist
+
+# Font downloads for scripts/gen_fonts.py
+/.cache/
