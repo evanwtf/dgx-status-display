@@ -1,0 +1,60 @@
+# dgx-status: send DGX status frames to the USB AMOLED display.
+#
+# Install (README, "Install the service"):
+#   sudo install -m 644 deploy/dgx-status.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now dgx-status
+#
+# The unit runs the project's own venv. Run `uv sync --frozen` in the checkout
+# first. Change DGX_STATUS_DEVICE, or put it in /etc/default/dgx-status.
+
+[Unit]
+Description=DGX status frames to the USB AMOLED display
+Documentation=https://github.com/evanwtf/dgx-status-display
+After=nvidia-persistenced.service
+
+[Service]
+Type=simple
+User=@USER@
+# The serial port is root:dialout 0660. This adds the group for this service
+# only; the user does not need to be in dialout.
+SupplementaryGroups=dialout
+WorkingDirectory=@REPO@
+Environment=DGX_STATUS_DEVICE=/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00
+Environment=DGX_STATUS_LOG_LEVEL=INFO
+EnvironmentFile=-/etc/default/dgx-status
+ExecStart=@REPO@/.venv/bin/dgx-status
+Restart=always
+RestartSec=5
+
+# Sandboxing. The daemon reads /proc, /sys and NVML (/dev/nvidia*), writes one
+# serial port, and logs to stdout. Settings that would hide those are left out:
+#  - no ProtectProc=invisible or ProcSubset=pid: the GPU occupant line reads
+#    /proc/<pid>/cmdline of processes that other users own;
+#  - no PrivateDevices or DevicePolicy=closed: NVML needs /dev/nvidiactl and
+#    /dev/nvidia0, and the board's tty can come and go with a replug;
+#  - no MemoryDenyWriteExecute: nvidia-ml-py loads libnvidia-ml through ctypes;
+#  - no ProtectClock: it implies DeviceAllow=char-rtc, which closes the device
+#    policy and blocks /dev/nvidia* and the tty.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
