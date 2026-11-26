@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from dgx_status.occupant import backend_for, describe_occupant, read_process
+from dgx_status.occupant import (
+    OccupantNamer,
+    backend_for,
+    describe_occupant,
+    read_process,
+)
 
 
 @pytest.mark.parametrize(
@@ -83,5 +88,50 @@ def test_several_backends_are_listed_once_each(tmp_path: Path) -> None:
     assert describe_occupant(tmp_path, [1, 2, 3]) == "llama.cpp, ollama"
 
 
-def test_pids_that_all_vanished_read_as_idle(proc_root: Path) -> None:
-    assert describe_occupant(proc_root, [999_999_999]) == "idle"
+def test_pids_that_all_vanished_are_unknown_not_idle(proc_root: Path) -> None:
+    """NVML saw a process on the GPU. Not being able to name it is not idle."""
+    assert describe_occupant(proc_root, [999_999_999]) is None
+
+
+def test_comm_with_invalid_utf8_does_not_crash(proc_root: Path) -> None:
+    """Fixture 4242: comm cut at 15 bytes in the middle of a UTF-8 character."""
+    raw = (proc_root / "4242" / "comm").read_bytes()
+    with pytest.raises(UnicodeDecodeError):
+        raw.decode()
+    proc = read_process(proc_root, 4242)
+    assert proc is not None
+    assert "\ufffd" in proc.comm
+    assert describe_occupant(proc_root, [4242]) == "llama.cpp"
+
+
+def _make(root: Path, pid: int, comm: str, cmd: bytes) -> None:
+    d = root / str(pid)
+    d.mkdir(exist_ok=True)
+    (d / "comm").write_text(comm + "\n")
+    (d / "cmdline").write_bytes(cmd)
+
+
+def test_cmdline_is_read_once_per_pid(tmp_path: Path) -> None:
+    _make(tmp_path, 7, "llama-server", b"llama-server\0-m\0a\0")
+    namer = OccupantNamer(tmp_path)
+    for _ in range(10):
+        assert namer.describe([7]) == "llama.cpp"
+    assert namer.cmdline_reads == 1
+
+
+def test_reused_pid_is_read_again(tmp_path: Path) -> None:
+    _make(tmp_path, 7, "llama-server", b"llama-server\0")
+    namer = OccupantNamer(tmp_path)
+    assert namer.describe([7]) == "llama.cpp"
+    _make(tmp_path, 7, "ollama", b"ollama\0runner\0")
+    assert namer.describe([7]) == "ollama"
+    assert namer.cmdline_reads == 2
+
+
+def test_cache_drops_pids_that_left_the_gpu(tmp_path: Path) -> None:
+    _make(tmp_path, 7, "llama-server", b"llama-server\0")
+    namer = OccupantNamer(tmp_path)
+    namer.describe([7])
+    assert namer.describe([]) == "idle"
+    namer.describe([7])
+    assert namer.cmdline_reads == 2

@@ -14,7 +14,7 @@ from pathlib import Path
 from dgx_status import procfs, sysfs
 from dgx_status.frame import Snapshot
 from dgx_status.gpu import GpuReader
-from dgx_status.occupant import describe_occupant
+from dgx_status.occupant import OccupantNamer
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ class Collector:
         self._host = host
         self._clock = clock
         self._prev_cpu: procfs.CpuTimes | None = None
+        self._occupant = OccupantNamer(proc_root)
 
     def snapshot(self) -> Snapshot:
         s = Snapshot(t=int(self._clock()), host=self._host)
@@ -63,7 +64,7 @@ class Collector:
         s.gpu_pct = g.util_pct
         s.gpu_w = g.power_w
         s.gpu_c = g.temp_c
-        s.occ = describe_occupant(self._proc, g.pids)
+        s.occ = self._occupant.describe(g.pids)
 
         devices = sysfs.read_hwmon(self._sys)
         s.fans = sysfs.read_fans(devices)

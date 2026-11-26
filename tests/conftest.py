@@ -4,6 +4,9 @@
 on 2026-11-25: /proc files, the thermal zones and the
 hwmon tree, with the nvfanread fans. `scripts/capture_fixtures.py` makes a
 fresh copy.
+
+One exception: `proc/4242/` is made by hand. Its comm is cut at 15 bytes in
+the middle of a UTF-8 character, as the kernel can do.
 """
 
 from __future__ import annotations
