@@ -27,3 +27,23 @@ def test_render_fills_every_placeholder() -> None:
     assert "User=someone" in text
     assert "ExecStart=/srv/checkout/.venv/bin/dgx-status" in text
     assert "SupplementaryGroups=dialout" in text
+
+
+def _settings() -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for line in UNIT.read_text().splitlines():
+        if line and not line.startswith(("#", "[")) and "=" in line:
+            key, _, value = line.partition("=")
+            out.setdefault(key, []).append(value)
+    return out
+
+
+def test_network_reaches_the_host_and_loopback_only() -> None:
+    """The LAN, Cluster IP and LLM data need the host network namespace and
+    AF_INET; IPAddressDeny/Allow keep the sockets on loopback."""
+    s = _settings()
+    assert "PrivateNetwork" not in s
+    families = s["RestrictAddressFamilies"][0].split()
+    assert {"AF_INET", "AF_INET6", "AF_UNIX", "AF_NETLINK"} <= set(families)
+    assert s["IPAddressDeny"] == ["any"]
+    assert s["IPAddressAllow"] == ["localhost"]

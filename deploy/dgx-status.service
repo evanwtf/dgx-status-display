@@ -32,7 +32,12 @@ Restart=always
 RestartSec=5
 
 # Sandboxing. The daemon reads /proc, /sys and NVML (/dev/nvidia*), writes one
-# serial port, and logs to stdout. Settings that would hide those are left out:
+# serial port, polls the LLM metrics exporter on loopback, and logs to stdout.
+# Settings that would hide those are left out:
+#  - no PrivateNetwork: a private namespace hides the host's interfaces from
+#    /proc/net/route and /sys/class/net (the LAN and Cluster IP tiles) and the
+#    exporter. AF_INET/AF_INET6 are allowed, and IPAddressDeny/Allow fence
+#    them to loopback;
 #  - no ProtectProc=invisible or ProcSubset=pid: the GPU occupant line reads
 #    /proc/<pid>/cmdline of processes that other users own;
 #  - no PrivateDevices or DevicePolicy=closed: NVML needs /dev/nvidiactl and
@@ -46,7 +51,6 @@ AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=yes
-PrivateNetwork=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
@@ -57,7 +61,9 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
-RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
 UMask=0077
 
 [Install]
