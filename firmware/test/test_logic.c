@@ -12,10 +12,12 @@
 #include "burnin.h"
 #include "carousel.h"
 #include "fmt.h"
+#include "history.h"
 #include "line_reader.h"
 #include "palette.h"
 #include "link_state.h"
 #include "report.h"
+#include "settings.h"
 #include "status.h"
 #include "tiles.h"
 
@@ -746,6 +748,137 @@ static void test_contrast(void)
            g_worst_value_pair, g_worst_label, g_worst_label_pair);
 }
 
+static void test_history_ring(void)
+{
+    static history_t h;
+    hist_init(&h);
+    CHECK(h.count == 0);
+    CHECK(hist_at(&h, HIST_GPU_PCT, 0) == HIST_GAP); /* empty */
+
+    status_frame_t f;
+    status_frame_clear(&f);
+    int64_t t = 5000;
+    for (int i = 0; i < 130; i++) { /* wraps: 130 > HIST_LEN */
+        f.gpu_pct = (float)i;
+        hist_push_frame(&h, &f, t);
+        t += 1000;
+    }
+    CHECK(h.count == HIST_LEN);
+    CHECK(hist_at(&h, HIST_GPU_PCT, 0) == 100);   /* oldest kept: i = 10, x10 */
+    CHECK(hist_at(&h, HIST_GPU_PCT, HIST_LEN - 1) == 1290); /* newest: 129 */
+    CHECK(hist_at(&h, HIST_GPU_W, 5) == HIST_GAP); /* never sent: a gap */
+
+    /* Jitter within half a period leaves no gap. */
+    hist_push_frame(&h, &f, t + 400);
+    CHECK(hist_at(&h, HIST_GPU_PCT, HIST_LEN - 2) != HIST_GAP);
+    /* 16 s of silence: 15 gaps, then the new sample. */
+    t += 400 + 16000;
+    f.gpu_pct = 50;
+    hist_push_frame(&h, &f, t);
+    CHECK(hist_at(&h, HIST_GPU_PCT, HIST_LEN - 1) == 500);
+    for (int i = 2; i <= 16; i++) {
+        CHECK(hist_at(&h, HIST_GPU_PCT, HIST_LEN - i) == HIST_GAP);
+    }
+    CHECK(hist_at(&h, HIST_GPU_PCT, HIST_LEN - 17) != HIST_GAP);
+    /* An hour of silence: the whole chart is gaps but the newest. */
+    hist_push_frame(&h, &f, t + 3600 * 1000LL);
+    for (int i = 0; i < HIST_LEN - 1; i++) {
+        CHECK(hist_at(&h, HIST_GPU_PCT, i) == HIST_GAP);
+    }
+    CHECK(sizeof(h.s) == 2160);
+}
+
+static void test_history_heights(void)
+{
+    static history_t h;
+    hist_init(&h);
+    status_frame_t f;
+    status_frame_clear(&f);
+    int16_t out[HIST_LEN];
+
+    /* Empty: every column is blank, and the metric still has a scale. */
+    CHECK(hist_heights(&h, HIST_GPU_C, &f, 200, out));
+    CHECK(out[HIST_LEN - 1] == -1);
+
+    const float temps[] = {20, 60, 100, 10, 150, NAN};
+    for (int i = 0; i < 6; i++) {
+        f.gpu_c = temps[i];
+        hist_push_frame(&h, &f, 1000 * (i + 1));
+    }
+    CHECK(hist_heights(&h, HIST_GPU_C, &f, 200, out));
+    /* Six samples fill the six right-hand columns, oldest first. */
+    CHECK(out[HIST_LEN - 7] == -1);
+    CHECK(out[HIST_LEN - 6] == 0);    /* 20 C: the bottom of 20-100 */
+    CHECK(out[HIST_LEN - 5] == 100);  /* 60 C: half */
+    CHECK(out[HIST_LEN - 4] == 200);  /* 100 C: the top */
+    CHECK(out[HIST_LEN - 3] == 0);    /* 10 C: below the scale, clamped */
+    CHECK(out[HIST_LEN - 2] == 200);  /* 150 C: above, clamped */
+    CHECK(out[HIST_LEN - 1] == -1);   /* missing: a gap, not zero */
+
+    /* Fans keep whole RPM: 13500 is the top, 6750 half. */
+    f.fan0_rpm = 6750;
+    hist_push_frame(&h, &f, 7000);
+    CHECK(hist_heights(&h, HIST_FAN0, &f, 100, out));
+    CHECK(out[HIST_LEN - 1] == 50);
+    /* Memory scales to the frame's total; no total, no chart. */
+    f.mem_used_gib = 30.5f;
+    f.mem_total_gib = 122;
+    hist_push_frame(&h, &f, 8000);
+    CHECK(hist_heights(&h, HIST_MEM_GIB, &f, 122, out));
+    CHECK(out[HIST_LEN - 1] == 31);
+    f.mem_total_gib = NAN;
+    CHECK(!hist_heights(&h, HIST_MEM_GIB, &f, 122, out));
+    CHECK(out[HIST_LEN - 1] == -1);
+    CHECK(!hist_heights(&h, HIST_NONE, &f, 100, out));
+}
+
+typedef struct {
+    bool has;
+    uint8_t value;
+    int saves;
+    bool fail_save;
+} fake_store_t;
+
+static bool fake_load(void *ctx, uint8_t *out)
+{
+    fake_store_t *s = ctx;
+    if (s->has) {
+        *out = s->value;
+    }
+    return s->has;
+}
+
+static bool fake_save(void *ctx, uint8_t v)
+{
+    fake_store_t *s = ctx;
+    s->saves++;
+    if (s->fail_save) {
+        return false;
+    }
+    s->has = true;
+    s->value = v;
+    return true;
+}
+
+static void test_settings(void)
+{
+    fake_store_t fs = {0};
+    settings_store_t st = {fake_load, fake_save, &fs};
+    CHECK(settings_chart_style(&st) == CHART_LEVEL); /* nothing stored */
+    CHECK(settings_chart_style(NULL) == CHART_LEVEL);
+    chart_style_t c = settings_toggle_chart_style(&st, CHART_LEVEL);
+    CHECK(c == CHART_HISTORY && fs.saves == 1 && fs.value == CHART_HISTORY);
+    CHECK(settings_chart_style(&st) == CHART_HISTORY); /* survives a "reboot" */
+    c = settings_toggle_chart_style(&st, c);
+    CHECK(c == CHART_LEVEL && settings_chart_style(&st) == CHART_LEVEL);
+    fs.value = 7; /* garbage in flash */
+    CHECK(settings_chart_style(&st) == CHART_LEVEL);
+    fs.fail_save = true;
+    CHECK(settings_toggle_chart_style(&st, CHART_LEVEL) == CHART_HISTORY);
+    CHECK_STR(chart_style_name(CHART_LEVEL), "Level");
+    CHECK_STR(chart_style_name(CHART_HISTORY), "2-minute history");
+}
+
 int main(void)
 {
     test_parse_real_frame();
@@ -770,6 +903,9 @@ int main(void)
     test_report_hello();
     test_tile_colors_and_levels();
     test_contrast();
+    test_history_ring();
+    test_history_heights();
+    test_settings();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }
