@@ -18,6 +18,9 @@ from typing import Any, Protocol
 logger = logging.getLogger(__name__)
 
 _MAX_POWER_W = 2000.0
+# After this many reads in a row with every field failed, shut NVML down and
+# initialize it again on the next read (a driver reload leaves a stale handle).
+REINIT_AFTER_FAILED_READS = 5
 _MIN_TEMP_C = -40
 _MAX_TEMP_C = 150
 
@@ -54,6 +57,7 @@ class NvmlGpu:
         self._index = index
         self._handle: Any = None
         self._failed_once = False
+        self._all_failed = 0
 
     def _ensure(self) -> Any:
         if self._nvml is None:
@@ -109,4 +113,22 @@ class NvmlGpu:
                 pids = tuple(int(p.pid) for p in procs)
             except (TypeError, AttributeError, ValueError):
                 pids = None
-        return GpuReading(util_pct=util_pct, power_w=power_w, temp_c=temp, pids=pids)
+        reading = GpuReading(util_pct=util_pct, power_w=power_w, temp_c=temp, pids=pids)
+        if reading == GpuReading():
+            self._all_failed += 1
+            if self._all_failed >= REINIT_AFTER_FAILED_READS:
+                self._reinit()
+        else:
+            self._all_failed = 0
+        return reading
+
+    def _reinit(self) -> None:
+        logger.warning(
+            "NVML: %d reads in a row failed; initializing again", self._all_failed
+        )
+        try:
+            self._nvml.nvmlShutdown()
+        except Exception as exc:
+            logger.debug("NVML shutdown failed: %s", exc)
+        self._handle = None
+        self._all_failed = 0

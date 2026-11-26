@@ -28,6 +28,7 @@ class FakeNvml:
         self.temp: Any = 43
         self.procs: Any = [type("P", (), {"pid": 11})(), type("P", (), {"pid": 12})()]
         self.inits = 0
+        self.shutdowns = 0
 
     def nvmlInit(self) -> None:  # noqa: N802 - NVML's own name
         self.inits += 1
@@ -35,7 +36,7 @@ class FakeNvml:
             raise self.init_error
 
     def nvmlShutdown(self) -> None:  # noqa: N802
-        pass
+        self.shutdowns += 1
 
     def nvmlDeviceGetHandleByIndex(self, index: int) -> str:  # noqa: N802
         return f"dev{index}"
@@ -109,3 +110,27 @@ def test_real_nvml_on_this_host() -> None:
     r = gpu.NvmlGpu().read()
     assert r.temp_c is not None
     assert r.pids is not None
+
+
+def test_reinitializes_after_repeated_total_failure() -> None:
+    fake = FakeNvml()
+    boom = FakeNvmlError("GPU is lost")
+    fake.util = fake.power_mw = fake.temp = fake.procs = boom
+    reader = NvmlGpu(nvml=fake)
+    for _ in range(gpu.REINIT_AFTER_FAILED_READS):
+        assert reader.read() == GpuReading()
+    assert fake.shutdowns == 1
+    assert fake.inits == 1
+    fake.util = type("U", (), {"gpu": 7})()
+    fake.temp = 43
+    assert reader.read().temp_c == 43
+    assert fake.inits == 2  # a fresh init after the shutdown
+
+
+def test_one_good_field_resets_the_failure_count() -> None:
+    fake = FakeNvml()
+    fake.util = fake.power_mw = fake.procs = FakeNvmlError("x")
+    reader = NvmlGpu(nvml=fake)
+    for _ in range(3 * gpu.REINIT_AFTER_FAILED_READS):
+        reader.read()
+    assert fake.shutdowns == 0
