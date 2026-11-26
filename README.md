@@ -63,10 +63,23 @@ echo "$PORT"           # must print exactly one path
 make setup             # uv sync --frozen, pre-commit install
 make check             # ruff, mypy, pytest
 make fw-build          # idf.py build in the container
-make backup            # once: save the factory firmware to backup/
+```
+
+Back up the factory firmware once, before the first flash:
+
+```bash
+make backup            # save the whole flash to backup/
+```
+
+Check that it succeeded before you go on. It must log a 16 MB flash, with
+secure boot and flash encryption off, and end with "backed up the flash".
+`backup/factory-16MB.bin` and its `.sha256` must exist. The flash targets
+refuse without a backup that matches its `.sha256`.
+
+```bash
 make flash-merged      # first install: erases the board's settings
 make dry-run           # log one frame; opens no device
-make install-service   # sudo: install, enable and start dgx-status
+make install-service   # asks for your sudo password; run make as yourself
 ```
 
 The board restarts and shows "DGX not sending" after the flash. After the
@@ -152,7 +165,9 @@ comes back after each one:
 
 Then it checks the size (16777216 bytes) and writes
 `backup/factory-16MB.bin.sha256`. It refuses to replace a backup that
-exists.
+exists. `make flash` and `make flash-merged` refuse unless both files exist
+and match. To flash with no backup, add `NO_BACKUP=1`; do this only if you
+have a copy of the factory image elsewhere.
 
 Stop if `get_security_info` shows secure boot or flash encryption enabled:
 this firmware is unsigned and the flash would not boot. Git ignores
@@ -187,10 +202,14 @@ button.
 
 `deploy/dgx-status.service` is a template. `make install-service` fills in
 `@USER@` (the account that runs the daemon, `$USER` by default; set
-`SERVICE_USER` to change it) and `@REPO@` (this checkout). Then it installs
-the unit with sudo, and runs `daemon-reload` and `enable --now`. It prints
-each sudo command before it runs it. The unit adds `dialout` for this
-service only. The daemon finds the board's port itself; to pin one port,
+`SERVICE_USER` to change it) and `@REPO@` (this checkout) in a temporary
+file (`scripts/service.py`). Then it installs the unit with
+`sudo install -m 0644`, and runs `daemon-reload`, `enable` and `restart`, so
+a new unit also reaches a running service. It prints each sudo command
+before it runs it. Run make as yourself, not with sudo: it refuses root.
+It refuses a checkout path that holds a space, `|`, `&`, `'` or `\`. It
+refuses to replace a unit that serves another checkout, unless you add
+`FORCE=1`. The unit adds `dialout` for this service only. The daemon finds the board's port itself; to pin one port,
 put `DGX_STATUS_DEVICE=...` in `/etc/default/dgx-status`.
 
 The network and storage tiles find their sources each second. Set one of
@@ -224,6 +243,9 @@ clone of the same tag, with its locked dependencies. These steps take the
 place of bootstrap steps 2 and 4. Do step 1 (the variables) first, and set
 `DEV` and `IDF_IMAGE` as in [Without make](#without-make).
 
+The make targets came in 0.0.3. For an older tag, use the raw command
+that each step names.
+
 Get the daemon at the release tag and check it. This replaces step 2:
 
 ```bash
@@ -236,9 +258,10 @@ uv run --frozen --no-dev dgx-status --version
 uv run --frozen --no-dev dgx-status --dry-run --once
 ```
 
-Do step 3 now (back up the factory firmware). `make backup` works here
-too; its `uv run` adds the dev tools to `.venv`. Then download the firmware
-and check it:
+Do step 3 now (back up the factory firmware): `make backup` for 0.0.3 or
+later (its `uv run` adds the dev tools to `.venv`), or the raw backup
+commands in [Without make](#without-make) for an older tag. Then download
+the firmware and check it:
 
 ```bash
 mkdir -p "$REPO/release" && cd "$REPO/release"
@@ -259,7 +282,8 @@ docker run --rm --device="$DEV" -v "$REPO/release:/release:ro" -w /release "$IDF
   write_flash 0x0 "dgx-status-display-$VERSION-esp32c6-merged.bin"
 ```
 
-Then install the service (step 5).
+Then install the service (step 5): `make install-service` for 0.0.3 or
+later, or the raw commands at the end of [Without make](#without-make).
 
 **Upgrade:** flash the parts from the zip with `flash_args`. This writes only
 the bootloader, the partition table and the app, so the settings stay. The
@@ -286,7 +310,7 @@ and `dgx-status.service`. `SHA256SUMS` covers every file.
 ## Build on another machine
 
 - **The firmware builds on any Linux or macOS machine with Docker.** Clone
-  the repo, then `make setup` and `make fw-build` (or `make fw-merge` for
+  the repo, then `make setup` and `make fw-build` (then `make fw-merge` for
   the one image). macOS ships GNU make 3.81; if a target fails with it,
   install a newer one (`brew install make`) and run `gmake`.
 - **On macOS, Docker cannot pass a USB device into a container**, so the
@@ -306,6 +330,7 @@ and `dgx-status.service`. `SHA256SUMS` covers every file.
   Update, the parts from `flash_args` (keeps the settings):
 
   ```bash
+  cd "$REPO"
   cd firmware/build
   uvx --from esptool==4.12.0 esptool.py --chip esp32c6 -p "$PORT" -b 460800 \
     write_flash @flash_args
@@ -364,15 +389,17 @@ decodes a saved core again without the board.
 
 ## Restore the factory firmware
 
-```bash
-cd "$REPO/backup" && sha256sum -c factory-16MB.bin.sha256 && cd "$REPO"
-sudo systemctl stop dgx-status        # if the service is installed
-docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" \
-  esptool.py --chip esp32c6 -p "$DEV" -b 460800 write_flash 0 backup/factory-16MB.bin
-sudo systemctl disable --now dgx-status   # the factory app does not read frames
-```
+These commands need `DEV` and `IDF_IMAGE` from
+[Without make](#without-make). The chain stops at the first failure, so
+the service stays enabled if the restore fails.
 
-This command needs `DEV` and `IDF_IMAGE` from [Without make](#without-make).
+```bash
+sudo systemctl stop dgx-status        # if the service is installed
+cd "$REPO/backup" && sha256sum -c factory-16MB.bin.sha256 && cd "$REPO" \
+  && docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" \
+    esptool.py --chip esp32c6 -p "$DEV" -b 460800 write_flash 0 backup/factory-16MB.bin \
+  && sudo systemctl disable dgx-status   # the factory app does not read frames
+```
 
 ## What the screen shows
 
@@ -461,21 +488,24 @@ checkout, so it works from any directory (`make -C "$REPO" fw-build`).
 | Target | Runs |
 | --- | --- |
 | `setup` | `uv sync --frozen`, `uv run --frozen pre-commit install` |
-| `check` | `uv run --frozen` `ruff format --check .`, `ruff check .`, `mypy`, `pytest -q -rs`, then pytest `-m 'not integration and not slow'`, which must skip nothing |
+| `check` | `uv run --frozen python scripts/run_checks.py`: `ruff format --check .`, `ruff check .`, `mypy`, `pytest -q -rs`, then pytest `-m 'not integration and not slow'`, which must skip nothing; every step runs |
 | `test` | `uv run --frozen pytest -q -rs` |
 | `fw-test`, `fw-build`, `fw-size`, `fw-preview`, `fw-merge` | `uv run --frozen python scripts/firmware.py test`, `build`, `size`, `preview`, `merge` |
 | `fonts-check` | `uv run --frozen python scripts/gen_fonts.py --check` |
-| `backup`, `flash`, `flash-merged`, `monitor` | `scripts/firmware.py backup`, `flash`, `merge` then `flash-merged`, `monitor`, each with `--port "$PORT"` |
+| `backup`, `flash`, `flash-merged`, `monitor` | `scripts/firmware.py backup`, `flash`, `merge` then `flash-merged`, `monitor`, each with `--port "$PORT"`; `flash` and `flash-merged` add `--no-backup` with `NO_BACKUP=1` |
 | `coredump` | `scripts/firmware.py coredump --port "$PORT"`, plus `--elf "$ELF"` when set |
-| `run` | `DGX_STATUS_LOG_LEVEL=INFO uv run --frozen dgx-status`, plus `--device "$PORT"` when set |
+| `run` | `DGX_STATUS_LOG_LEVEL=INFO uv run --frozen dgx-status`, plus `--device "$PORT"` when set (checked like a board target) |
 | `dry-run` | `uv run --frozen dgx-status --dry-run --once` |
-| `install-service`, `uninstall-service` | the `sed`, `sudo tee` and `systemctl` commands below |
+| `install-service` | `scripts/service.py render` to a temporary file, then `sudo install -m 0644`, `systemctl daemon-reload`, `enable`, `restart` |
+| `uninstall-service` | `sudo systemctl disable --now`, remove the unit, `daemon-reload` |
 | `release-check` | `scripts/release_check.py version "v$VERSION"` and `notes "$VERSION"` |
 | `clean` | `git clean -f -d -X --` on `firmware/build`, `firmware/test/build`, `firmware/test/preview/build`, `firmware/preview` and `dist` (git-ignored files only) |
 
 A board target refuses when `PORT` is unset or does not match exactly one
-path. `scripts/firmware.py` then refuses a path that is not a serial
-device, and refuses while the `dgx-status` service is active.
+path. `scripts/firmware.py` then refuses a path that does not resolve to a
+`/dev/ttyACM*` or `/dev/ttyUSB*` device, and refuses while the `dgx-status`
+service is active. It warns when `PORT` is not an Espressif port under
+`/dev/serial/by-id/`.
 
 ### Without make
 
@@ -516,9 +546,10 @@ mkdir -p backup
 alias esptool='docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" esptool.py --chip esp32c6 -p "$DEV"'
 esptool flash_id                      # must report a 16 MB flash
 esptool get_security_info             # secure boot and flash encryption must be off
-docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" \
+test ! -e backup/factory-16MB.bin \
+  && docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" \
   bash -c "esptool.py --chip esp32c6 -p $DEV -b 460800 read_flash 0 0x1000000 backup/factory-16MB.bin \
-    && chown $(id -u):$(id -g) backup/factory-16MB.bin"
+    && chown $(id -u):$(id -g) backup/factory-16MB.bin"   # never over an old backup
 ls -l backup/factory-16MB.bin         # must be 16777216 bytes
 esptool -b 460800 verify_flash 0 backup/factory-16MB.bin   # reads the chip again and compares
 (cd backup && sha256sum factory-16MB.bin > factory-16MB.bin.sha256)
@@ -549,7 +580,8 @@ Install the service (step 5):
 sed -e "s|@USER@|$USER|g" -e "s|@REPO@|$REPO|g" "$REPO/deploy/dgx-status.service" \
   | sudo tee /etc/systemd/system/dgx-status.service >/dev/null
 sudo systemctl daemon-reload
-sudo systemctl enable --now dgx-status
+sudo systemctl enable dgx-status
+sudo systemctl restart dgx-status
 ```
 
 ## Cut a release

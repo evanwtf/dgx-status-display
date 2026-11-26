@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- A top-level `Makefile`: `make` lists the targets. Each target calls `uv`
+  or a script in `scripts/`; none repeats the image pin. The README starts
+  with the requirements and a quick start with make.
+- Board steps in `scripts/firmware.py`: `flash` (with `flash_args`; keeps
+  the settings), `flash-merged` (the merged image at 0x0; erases the
+  settings), `backup` (the whole 16 MB flash, verified, with a `.sha256`)
+  and `monitor`. Each runs esptool in the pinned image with `--device`.
+- Refusals: the board steps refuse a port that is not one `/dev/ttyACM*` or
+  `/dev/ttyUSB*` device, and refuse while the service runs. `flash` and
+  `flash-merged` refuse without a factory backup that matches its
+  `.sha256` (`NO_BACKUP=1` overrides). `backup` never replaces a backup.
+- `make install-service` renders the unit with `scripts/service.py`. It
+  refuses root, an unsafe checkout path, and a unit for another checkout
+  (`FORCE=1` overrides). It restarts the service, so a new unit takes
+  effect.
+- CI's python job runs `make check` (`scripts/run_checks.py`).
+
 ## 0.0.2 (2026-11-26)
 
 New firmware needs the daemon from this version. With an older daemon,
