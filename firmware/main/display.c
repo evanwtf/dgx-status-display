@@ -168,7 +168,14 @@ esp_err_t display_init(void)
         .rotation = {.swap_xy = false, .mirror_x = false, .mirror_y = false},
         .flags = {.buff_dma = true, .swap_bytes = true},
     };
+    /* esp_lvgl_port calls esp_lcd_panel_swap_xy(panel, false) for rotation 0
+     * whatever the config, and the sh8601 driver logs "swap_xy is not
+     * supported" for any call. The panel needs no swap. sw_rotate would skip
+     * the call, but also the mirror call that sets the panel's orientation
+     * today, so keep the behavior and only hide that one log line. */
+    esp_log_level_set("sh8601", ESP_LOG_NONE);
     lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);
+    esp_log_level_set("sh8601", ESP_LOG_INFO);
     ESP_RETURN_ON_FALSE(disp != NULL, ESP_FAIL, TAG, "lvgl display");
 
     if (touch != NULL) {
