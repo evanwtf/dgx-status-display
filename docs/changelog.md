@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.3 (2026-11-26)
 
 - A top-level `Makefile`: `make` lists the targets. Each target calls `uv`
   or a script in `scripts/`; none repeats the image pin. The README starts
