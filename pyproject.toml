@@ -3,6 +3,8 @@ name = "dgx-status"
 version = "0.1.0"
 description = "Send DGX Spark status frames over USB serial to an ESP32-C6 AMOLED display."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.13"
 dependencies = [
     "nvidia-ml-py>=13.580",

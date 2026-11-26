@@ -15,4 +15,9 @@ First version: phase 1, USB serial.
   detail pages, LIVE / STALE / NO DATA, burn-in care (pixel shift, gray text,
   dimming), a hello line with the firmware version. Pins and panel init come
   from Waveshare's demo code.
-- systemd unit with sandboxing, and CI on the self-hosted runner.
+- The daemon finds the board's `/dev/serial/by-id/` port itself;
+  `DGX_STATUS_DEVICE` takes a path or a glob.
+- systemd unit as a template (`@USER@`, `@REPO@`) with sandboxing, and CI on
+  the self-hosted runner, with a fork guard.
+- MIT license; NOTICE credits the Waveshare hardware facts. A test keeps
+  private infrastructure out of every file.

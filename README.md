@@ -1,5 +1,11 @@
 # dgx-status-display
 
+[![check](https://github.com/evanwtf/dgx-status-display/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/evanwtf/dgx-status-display/actions/workflows/check.yml?query=branch%3Amain)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3130/)
+[![ESP-IDF v5.5.6](https://img.shields.io/badge/ESP--IDF-v5.5.6-E7352C.svg?logo=espressif&logoColor=white)](https://github.com/espressif/esp-idf/releases/tag/v5.5.6)
+[![Board: Waveshare ESP32-C6-Touch-AMOLED-2.16](https://img.shields.io/badge/board-ESP32--C6--Touch--AMOLED--2.16-orange.svg)](https://docs.waveshare.com/ESP32-C6-Touch-AMOLED-2.16)
+
 A live status screen for a DGX Spark. A Waveshare ESP32-C6-Touch-AMOLED-2.16
 plugs into a USB-C port on the Spark. A small Python daemon on the Spark
 sends one JSON frame per second over USB serial, and the board draws it:
@@ -9,6 +15,20 @@ every temperature sensor. When the frames stop, the screen says so.
 Phase 1 is USB serial only. See [docs/plan.md](docs/plan.md) for phase 2
 (Wi-Fi, outlet power, both Sparks) and [docs/protocol.md](docs/protocol.md)
 for the frame format.
+
+## Hardware
+
+- **Board:** [Waveshare ESP32-C6-Touch-AMOLED-2.16](https://docs.waveshare.com/ESP32-C6-Touch-AMOLED-2.16).
+  A 2.16-inch 480×480 AMOLED (CO5300 driver, QSPI), CST9220 capacitive
+  touch, an AXP2101 power chip and an ESP32-C6 with 16 MB flash and no PSRAM.
+- **Link:** one USB-C cable to the DGX Spark. It carries power and the
+  frames (the C6's built-in USB-Serial-JTAG). No Wi-Fi in phase 1.
+- **Host:** an NVIDIA DGX Spark (GB10). The fan readings need the
+  `nvfanread` hwmon module.
+
+The screen shows GPU use, power and temperature, what is on the GPU, memory,
+CPU, load, fan speeds, board, NVMe and NIC temperatures, uptime and the
+host's clock. A tap opens a page with every temperature sensor.
 
 ## Bootstrap
 
@@ -21,8 +41,9 @@ group.
 
 ```bash
 export REPO=~/git/dgx-status-display
-# The board's stable serial path. List it with: ls -l /dev/serial/by-id/
-export PORT=/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00
+# The board's stable serial path. Its name holds the chip's MAC, so find it:
+export PORT=$(ls /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00)
+echo "$PORT"                         # must print exactly one path
 export DEV=$(readlink -f "$PORT")    # for example /dev/ttyACM0
 export IDF_IMAGE=espressif/idf:v5.5.6@sha256:bf72fe7a15c22849a9a94147301165a545fb8905d97c176cf748e3e4614cac84
 ```
@@ -77,18 +98,21 @@ The board restarts and shows "DGX not sending".
 
 ### 5. Install the service
 
-The unit runs `$REPO/.venv/bin/dgx-status` as the service user, with `dialout` added
-for this service only. Edit `User=`, the paths and `DGX_STATUS_DEVICE` in
-the unit if yours differ.
+`deploy/dgx-status.service` is a template. The install fills in `@USER@`
+(the account that runs the daemon) and `@REPO@` (the checkout). The unit
+adds `dialout` for this service only. The daemon finds the board's port
+itself; to pin one port, put `DGX_STATUS_DEVICE=...` in
+`/etc/default/dgx-status`.
 
 ```bash
-sudo install -m 644 "$REPO/deploy/dgx-status.service" /etc/systemd/system/
+sed -e "s|@USER@|$USER|g" -e "s|@REPO@|$REPO|g" "$REPO/deploy/dgx-status.service" \
+  | sudo tee /etc/systemd/system/dgx-status.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now dgx-status
 journalctl -u dgx-status -f
 ```
 
-Within a few seconds the log shows `connected to /dev/serial/by-id/...` and
+Within a few seconds the log shows `connected to /dev/serial/by-id/...`, and
 `display says hello: dgx-status-display, fw 0.1.0`, and the screen shows LIVE.
 
 ## Serial port access
@@ -98,7 +122,7 @@ The port is `root:dialout 0660`. Pick one:
 - **The service (default):** `SupplementaryGroups=dialout` in the unit. Your
   user stays out of `dialout`.
 - **Manual runs as your user:** `sudo usermod -aG dialout "$USER"`, then log
-  out and in. Then `uv run dgx-status --device "$PORT"`.
+  out and in. Then `uv run dgx-status` (or `--device "$PORT"` to pin a port).
 
 ## Restore the factory firmware
 
@@ -137,3 +161,9 @@ uv run python scripts/firmware.py build
 
 `tests/fixtures/spark/` holds /proc and /sys files copied from a DGX Spark.
 `scripts/capture_fixtures.py` copies a fresh set, read-only.
+
+## Credits and license
+
+MIT; see [LICENSE](LICENSE). [NOTICE](NOTICE) lists what came from
+elsewhere: the board's pin map, panel init values and power-chip settings
+come from Waveshare's demo code for this board.

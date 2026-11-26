@@ -1,0 +1,42 @@
+dgx-status-display
+Copyright (c) 2026 Evan Hoffman. MIT License (see LICENSE).
+
+Hardware facts taken from other sources
+---------------------------------------
+
+The firmware contains hardware facts for the Waveshare
+ESP32-C6-Touch-AMOLED-2.16, taken from Waveshare's demo repository
+https://github.com/waveshareteam/ESP32-C6-Touch-AMOLED-2.16 at commit
+294543798f1a44e2f2c4d2976522323f2beee11d:
+
+- firmware/main/board.h: the GPIO pin map (display QSPI, I2C, touch reset and
+  interrupt) and the power chip's I2C address. From
+  02_Example/ESP-IDF-v5.5.3/09_LVGL_V9_Test, 02_Example/Arduino-v3.3.3/
+  09_LVGL_V9_Test/user_config.h and 02_Example/XiaoZhi-v2.2.5/main/boards/
+  waveshare/esp32-c6-touch-amoled-2.16/config.h.
+- firmware/main/display.c: the CO5300 panel init values (s_init_cmds), the
+  brightness command encoding, the even/odd area rounding and the touch
+  orientation flags. From 02_Example/ESP-IDF-v5.5.3/09_LVGL_V9_Test/
+  components/port_bsp/display_bsp.cpp and components/app_bsp/lvgl_bsp.cpp.
+  The Waveshare repository carries no license file.
+- firmware/main/axp2101.c: the AXP2101 register writes (DCDC1 and ALDO1-4 at
+  3.3 V, the ALDO3 power cycle that resets the panel). From the XiaoZhi board
+  file above. XiaoZhi is MIT licensed, Copyright (c) 2025 Shenzhen Xinzhi
+  Future Technology Co., Ltd. The register addresses match XPowersLib
+  (REG/AXP2101Constants.h), MIT licensed, Copyright (c) 2022 lewis he.
+
+These are register values and pin numbers, not program logic. All code in
+this repository was written for it.
+
+Dependencies (fetched at build time, not included here)
+-------------------------------------------------------
+
+- ESP-IDF v5.5.6, including cJSON: Apache-2.0 (cJSON: MIT).
+- espressif/esp_lvgl_port, espressif/esp_lcd_sh8601, espressif/esp_lcd_touch,
+  espressif/cmake_utilities: Apache-2.0.
+- waveshare/esp_lcd_touch_cst9217: Apache-2.0.
+- lvgl/lvgl 9.6: MIT. The firmware uses LVGL's built-in Montserrat fonts,
+  which LVGL converted from Montserrat and Font Awesome Free glyphs; both
+  upstream fonts are under the SIL Open Font License 1.1.
+- Python: pyserial (BSD), nvidia-ml-py (BSD), as their package metadata
+  states.
