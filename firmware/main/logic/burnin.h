@@ -24,7 +24,7 @@
 /* Panel brightness (register 0x51, 0-255). */
 #define BRIGHTNESS_LIVE 110
 #define BRIGHTNESS_IDLE 70
-#define BRIGHTNESS_NO_DATA 30
+#define BRIGHTNESS_NO_DATA 60 /* 30 was too dim to read NO DATA on the panel */
 
 typedef struct {
     int8_t dx;
