@@ -17,14 +17,11 @@ CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 # Wi-Fi and Bluetooth are unused in phase 1.
 CONFIG_BT_ENABLED=n
 
-# LVGL 9: RGB565, its own heap, and the three Montserrat sizes the UI uses.
+# LVGL 9: RGB565 and its own heap. The UI's fonts are generated (main/fonts/);
+# Montserrat 14 stays only as LVGL's default font.
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_MEM_SIZE=49152
 CONFIG_LV_FONT_MONTSERRAT_14=y
-CONFIG_LV_FONT_MONTSERRAT_20=y
-CONFIG_LV_FONT_MONTSERRAT_28=y
-CONFIG_LV_FONT_MONTSERRAT_32=y
-CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_USE_LOG=n
 CONFIG_LV_USE_DEMO_WIDGETS=n
 CONFIG_LV_USE_DEMO_BENCHMARK=n

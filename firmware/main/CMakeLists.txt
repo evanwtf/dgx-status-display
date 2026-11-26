@@ -6,11 +6,14 @@ idf_component_register(
         "serial_rx.c"
         "ui.c"
         "view.c"
-        "fonts.c"
         "fonts/jbm_num_110.c"
         "fonts/jbm_num_82.c"
         "fonts/jbm_mix_66.c"
         "fonts/jbm_text_36.c"
+        "fonts/brl_24.c"
+        "fonts/brl_30.c"
+        "fonts/brl_32.c"
+        "fonts/brl_44.c"
         "logic/frame_parse.c"
         "logic/line_reader.c"
         "logic/link_state.c"
@@ -19,6 +22,7 @@ idf_component_register(
         "logic/tiles.c"
         "logic/carousel.c"
         "logic/report.c"
+        "logic/palette.c"
     INCLUDE_DIRS "." "logic"
     REQUIRES
         esp_driver_i2c

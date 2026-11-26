@@ -43,6 +43,10 @@ void view_model_fill(view_model_t *m, const status_frame_t *f, link_state_t st,
 /* Draw the model. Sets text only where it changed. */
 void view_render(const view_model_t *m);
 
+/* Animate the level fill when a value changes (default on). The host
+ * preview turns it off: its clock does not run. */
+void view_set_animations(bool on);
+
 /* Move the whole layout (burn-in pixel shift). */
 void view_set_shift(int dx, int dy);
 

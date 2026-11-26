@@ -24,11 +24,17 @@
 static uint16_t s_fb[W * W];
 static uint8_t s_rgb[W * W * 3];
 static int s_failed;
-/* The README image: four screens at half size, 2 x 2. */
+/* Contact sheet: every screen at half size, SHEET_COLS per row. */
 #define HALF (W / 2)
 #define SEP 8
-#define CW (2 * HALF + SEP)
-static uint8_t s_sheet[CW * CW * 3];
+#define SHEET_COLS 4
+#define SHEET_MAX 16
+#define SHEET_W (SHEET_COLS * HALF + (SHEET_COLS - 1) * SEP)
+static uint8_t s_sheet[SHEET_W * ((SHEET_MAX / SHEET_COLS) * (HALF + SEP)) * 3];
+static int s_sheet_n;
+/* The README image: four chosen screens, 2 x 2. */
+#define README_W (2 * HALF + SEP)
+static uint8_t s_readme[README_W * README_W * 3];
 
 /* The same real frame as firmware/test/test_logic.c: `dgx-status --dry-run
  * --once` on a DGX Spark, with the host name replaced. */
@@ -80,10 +86,9 @@ static void save(const char *dir, const char *name)
     printf("wrote %s\n", path);
 }
 
-/* Downscale the current frame 2:1 (box filter) into sheet cell `cell`. */
-static void add_to_sheet(int cell)
+/* Downscale the current frame 2:1 (box filter) into a sheet. */
+static void downscale_into(uint8_t *sheet, int sheet_w, int ox, int oy)
 {
-    int ox = (cell % 2) * (HALF + SEP), oy = (cell / 2) * (HALF + SEP);
     for (int y = 0; y < HALF; y++) {
         for (int x = 0; x < HALF; x++) {
             for (int ch = 0; ch < 3; ch++) {
@@ -91,10 +96,24 @@ static void add_to_sheet(int cell)
                 for (int k = 0; k < 4; k++) {
                     sum += s_rgb[((2 * y + k / 2) * W + 2 * x + k % 2) * 3 + ch];
                 }
-                s_sheet[((oy + y) * CW + ox + x) * 3 + ch] = (uint8_t)(sum / 4);
+                sheet[((oy + y) * sheet_w + ox + x) * 3 + ch] = (uint8_t)(sum / 4);
             }
         }
     }
+}
+
+static void add_to_sheet(void)
+{
+    if (s_sheet_n >= SHEET_MAX) {
+        return;
+    }
+    int n = s_sheet_n++;
+    downscale_into(s_sheet, SHEET_W, (n % SHEET_COLS) * (HALF + SEP), (n / SHEET_COLS) * (HALF + SEP));
+}
+
+static void add_to_readme(int cell)
+{
+    downscale_into(s_readme, README_W, (cell % 2) * (HALF + SEP), (cell / 2) * (HALF + SEP));
 }
 
 static void show(const char *dir, const char *name, const status_frame_t *f, link_state_t st,
@@ -110,6 +129,7 @@ static void show(const char *dir, const char *name, const status_frame_t *f, lin
     m.stack_free_ui = 3100;
     render(&m);
     save(dir, name);
+    add_to_sheet();
 }
 
 static carousel_t on_page(page_id_t p)
@@ -168,15 +188,18 @@ int main(int argc, char **argv)
     lv_display_set_buffers(d, s_fb, NULL, sizeof(s_fb), LV_DISPLAY_RENDER_MODE_FULL);
     lv_display_set_flush_cb(d, flush_cb);
     view_init(lv_screen_active(), NULL, NULL);
+    view_set_animations(false);
 
     status_frame_t real;
     if (frame_parse(REAL, strlen(REAL), &real) != FRAME_OK) {
         fprintf(stderr, "the real frame does not parse\n");
         return 1;
     }
-    show(dir, "1-gpu", &real, LINK_LIVE, 0, on_page(PAGE_GPU));
-    show(dir, "2-cooling", &real, LINK_LIVE, 0, on_page(PAGE_COOLING));
-    show(dir, "3-host", &real, LINK_LIVE, 0, on_page(PAGE_HOST));
+    memset(s_sheet, 0x30, sizeof(s_sheet)); /* gray gutters between cells */
+    memset(s_readme, 0x30, sizeof(s_readme));
+    show(dir, "01-gpu", &real, LINK_LIVE, 0, on_page(PAGE_GPU));
+    show(dir, "02-cooling", &real, LINK_LIVE, 0, on_page(PAGE_COOLING));
+    show(dir, "03-host", &real, LINK_LIVE, 0, on_page(PAGE_HOST));
 
     status_frame_t busy = real;
     busy.gpu_pct = 97;
@@ -186,39 +209,53 @@ int main(int argc, char **argv)
     busy.fan0_rpm = 9000;
     busy.fan1_rpm = 13500;
     busy.board_c = 72;
-    busy.nvme_c = 81;
+    busy.nvme_c = 61;
     busy.cpu_pct = 63;
     busy.mem_used_gib = 101.4f;
     busy.load1 = 12.48f;
-    memset(s_sheet, 0x30, sizeof(s_sheet)); /* gray gutters between cells */
-    show(dir, "4-busy-gpu", &busy, LINK_LIVE, 0, on_page(PAGE_GPU));
-    add_to_sheet(0);
-    show(dir, "5-busy-cooling", &busy, LINK_LIVE, 0, on_page(PAGE_COOLING));
-    add_to_sheet(1);
-    show(dir, "6-busy-host", &busy, LINK_LIVE, 0, on_page(PAGE_HOST));
-    add_to_sheet(2);
-    show(dir, "7-stale", &busy, LINK_STALE, 6, on_page(PAGE_GPU));
+    show(dir, "04-busy-gpu", &busy, LINK_LIVE, 0, on_page(PAGE_GPU));
+    add_to_readme(0);
+    show(dir, "05-busy-cooling", &busy, LINK_LIVE, 0, on_page(PAGE_COOLING));
+    add_to_readme(1);
+    show(dir, "06-busy-host", &busy, LINK_LIVE, 0, on_page(PAGE_HOST));
+    add_to_readme(2);
+
+    status_frame_t hot = busy;
+    hot.gpu_c = 92;
+    hot.board_c = 82;
+    hot.nvme_c = 75;
+    show(dir, "07-hot-gpu", &hot, LINK_LIVE, 0, on_page(PAGE_GPU));
+    show(dir, "08-hot-cooling", &hot, LINK_LIVE, 0, on_page(PAGE_COOLING));
+    show(dir, "09-stale", &busy, LINK_STALE, 6, on_page(PAGE_GPU));
 
     status_frame_t missing;
     status_frame_clear(&missing);
     missing.t = real.t;
     missing.has_tz = real.has_tz;
     missing.tz_s = real.tz_s;
-    show(dir, "8-missing", &missing, LINK_LIVE, 0, on_page(PAGE_HOST));
+    show(dir, "10-missing", &missing, LINK_LIVE, 0, on_page(PAGE_HOST));
 
     carousel_t nodata = {.page = PAGE_GPU, .no_data = true};
-    show(dir, "9-no-data", &real, LINK_NO_DATA, 133, nodata);
-    add_to_sheet(3);
+    show(dir, "11-no-data", &real, LINK_NO_DATA, 133, nodata);
+    add_to_readme(3);
+    show(dir, "12-no-data-boot", &missing, LINK_NO_DATA, -1, nodata);
+    carousel_t detail = {.page = PAGE_GPU, .detail = true};
+    show(dir, "13-detail", &real, LINK_LIVE, 0, detail);
+
     char path[512];
-    snprintf(path, sizeof(path), "%s/pages.png", dir);
-    if (png_write_rgb(path, s_sheet, CW, CW) != 0) {
+    int rows = (s_sheet_n + SHEET_COLS - 1) / SHEET_COLS;
+    snprintf(path, sizeof(path), "%s/contact-sheet.png", dir);
+    if (png_write_rgb(path, s_sheet, SHEET_W, rows * (HALF + SEP) - SEP) != 0) {
         s_failed++;
     } else {
         printf("wrote %s\n", path);
     }
-    show(dir, "10-no-data-boot", &missing, LINK_NO_DATA, -1, nodata);
-    carousel_t detail = {.page = PAGE_GPU, .detail = true};
-    show(dir, "11-detail", &real, LINK_LIVE, 0, detail);
+    snprintf(path, sizeof(path), "%s/pages.png", dir);
+    if (png_write_rgb(path, s_readme, README_W, README_W) != 0) {
+        s_failed++;
+    } else {
+        printf("wrote %s\n", path);
+    }
 
     /* Numbers must not move as they tick. */
     status_frame_t f = busy;

@@ -16,10 +16,11 @@ OUT ?= $(FW)/preview
 LVGL_SRC := $(shell find $(LVGL_DIR)/src -name '*.c' | sort)
 LVGL_OBJ := $(patsubst $(LVGL_DIR)/%.c,$(BUILD)/lvgl/%.o,$(LVGL_SRC))
 
-APP_SRC := preview.c png.c $(FW)/main/view.c $(FW)/main/fonts.c \
+APP_SRC := preview.c png.c $(FW)/main/view.c \
 	$(wildcard $(FW)/main/fonts/*.c) \
 	$(FW)/main/logic/tiles.c $(FW)/main/logic/carousel.c $(FW)/main/logic/fmt.c \
-	$(FW)/main/logic/link_state.c $(FW)/main/logic/frame_parse.c
+	$(FW)/main/logic/link_state.c $(FW)/main/logic/frame_parse.c \
+	$(FW)/main/logic/palette.c
 
 KCONFIG := $(BUILD)/lv_kconfig.h
 COMMON := -O1 -include $(KCONFIG) -I$(LVGL_DIR) -I$(FW)/main

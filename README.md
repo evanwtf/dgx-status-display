@@ -190,30 +190,35 @@ sudo systemctl disable --now dgx-status   # the factory app does not read frames
 ## What the screen shows
 
 The panel is about 40 mm across, so every value is big. Three pages of four
-tiles cycle every 10 seconds. Each tile has a label, one value and a unit.
+colored tiles cycle every 10 seconds. Each tile has a label, one value and a
+unit.
 
 | Page | Tiles |
 | --- | --- |
-| GPU | util %, power W, GPU °C, what is on the GPU (`idle` or the backend) |
-| Cooling | fan 0 and fan 1 in kRPM (2700 RPM shows as `2.7`), board °C, NVMe °C |
-| Host | CPU %, memory used (with `/ total GiB` as the unit), load 1m, uptime |
+| GPU | Usage %, Power W, Temp °C, Running (`idle` or the backend) |
+| Cooling | Fan 1 and Fan 2 in kRPM (2700 RPM shows as `2.7`), Board °C, SSD °C |
+| Host | CPU %, Memory used (`/ total GiB` as the unit), Load avg, Up |
 
 ![The three pages and the NO DATA screen](docs/img/pages.png)
 
-- **Top strip:** a green LIVE dot (amber, with the age, when STALE), the host
-  clock, and one dot per page.
+- **Color carries the reading.** Usage, Power, the fans, CPU and Memory fill
+  from the bottom to the value's fraction (Power against 240 W), and the
+  fill eases to a new level in 400 ms. Temperature tiles turn from blue to
+  amber at the threshold and red above it, with a bright edge on top:
+  GPU 80 / 90 °C, board and SSD 70 / 80 °C.
+- **Top strip:** the page title, the host clock and a link dot (gold LIVE,
+  amber STALE with the age).
 - **Touch:** a tap moves to the next page and restarts the 10-second timer.
   A long press opens every temperature sensor; a tap or 20 seconds goes back.
-- **NO DATA** (no frame for over 10 s): the carousel stops; the dimmed screen
-  says "DGX not sending" and how long ago the last frame came.
-- **Colors:** GPU °C turns amber at 80 and red at 90; board and NVMe °C at
-  70 and 80. Everything else stays gray.
-- **Numbers hold still:** values use JetBrains Mono, right-aligned against a
-  fixed edge, with fixed decimal places, so the last digit keeps its column.
-- **Burn-in care:** black background, outlined tiles with no fills, the
-  layout moves along a 10-pixel orbit every 3 minutes, a gentle dim after
-  10 minutes with no change (no tap, no link change, no new GPU occupant),
-  dimmest in NO DATA. The page changes help too.
+- **NO DATA** (no frame for over 10 s): the carousel stops; a black, dimmed
+  screen says "No data from the DGX" and how long ago the last frame came.
+- **Type:** values in JetBrains Mono, right-aligned against a fixed edge with
+  fixed decimals, so the last digit keeps its column; words in Barlow Semi
+  Condensed. Every text color passes a contrast test (values 7:1, labels
+  4.5:1) over every shade it can sit on.
+- **Burn-in care:** black ground and gutters, the layout moves along a
+  10-pixel orbit every 3 minutes, a gentle dim after 10 minutes with no
+  change, and the pages put different hues in the same places.
 
 Each value is one instantaneous reading. An unknown value shows `—`.
 

@@ -5,54 +5,66 @@
 
 #include "fonts.h"
 #include "logic/fmt.h"
+#include "logic/palette.h"
 
-/* Colors: grays on black, never white. Tiles are outlines, never fills, so
- * no area of the AMOLED stays lit at a high level for hours. */
-#define C_BG 0x000000
-#define C_VALUE 0xC8C8C8
-#define C_LABEL 0x7A7A7A
-#define C_UNIT 0x8C8C8C
-#define C_BORDER 0x262626
-#define C_DOT_OFF 0x303030
-#define C_DOT_ON 0x9A9A9A
-#define C_LIVE 0x2E9E3A
-#define C_AMBER 0xD08A1E
-#define C_RED 0xD8443C
-#define C_NODATA 0xA84040
-
-/* Geometry, in pixels. The panel is 480 x 480. MARGIN leaves room for the
- * burn-in orbit (up to 10 px) without cutting a tile. */
+/*
+ * Layout, in pixels. The panel is 480 x 480 with rounded corners.
+ *
+ * The four tiles read as one rounded square split by a black cross: each
+ * tile's outer corner (the one nearest a screen corner) follows the panel's
+ * corner, concentric with it; its three inner corners are small. MARGIN
+ * leaves room for the burn-in orbit (up to 10 px).
+ */
 #define W 480
 #define MARGIN 14
-#define STRIP_Y 8
-#define STRIP_H 40
-#define GRID_Y 58
+#define STRIP_Y 6
+#define GRID_Y 56
 #define GAP 8
-#define TILE_W ((W - 2 * MARGIN - GAP) / 2)        /* 222 */
-#define TILE_H ((W - GRID_Y - MARGIN - GAP) / 2)   /* 200 */
-#define TILE_PAD 12
-#define TEXT_W (TILE_W - 2 * TILE_PAD)             /* 198 */
+#define TILE_W ((W - 2 * MARGIN - GAP) / 2)          /* 222 */
+#define TILE_H ((W - GRID_Y - MARGIN - GAP) / 2)     /* 201 */
+#define TILE_PAD 16                                  /* labels and units */
+#define TEXT_W (TILE_W - 2 * TILE_PAD)               /* 190 */
+#define VALUE_PAD 12                                 /* values: 9 x 21.6 px fit */
+#define VALUE_W (TILE_W - 2 * VALUE_PAD)             /* 198 */
 #define VALUE_BASELINE 142 /* tile-local y; every tier sits on it */
 #define LABEL_Y 8
 #define UNIT_BOTTOM (TILE_H - 8)
+#define INNER_R 6
+/* The panel's own corner radius. Estimated from the module photos: there is
+ * no published figure. The tiles' outer corners use it minus their inset, so
+ * the curves are concentric. Tune it on the device. */
+#define PANEL_CORNER_R 54
+#define OUTER_R (PANEL_CORNER_R - MARGIN) /* 40 */
+#define EDGE_H 3
+#define FILL_ANIM_MS 400
 
 static lv_obj_t *s_root;
-static lv_obj_t *s_pages;  /* the four tiles and the strip */
+static lv_obj_t *s_pages; /* the four tiles and the strip */
 static lv_obj_t *s_detail;
 static lv_obj_t *s_nodata;
 
 /* Strip */
-static lv_obj_t *s_dot, *s_status, *s_clock, *s_page_dot[PAGE_COUNT];
+static lv_obj_t *s_title, *s_stale, *s_clock, *s_dot;
 /* Tiles */
-static lv_obj_t *s_tile_label[TILES_PER_PAGE];
-static lv_obj_t *s_tile_value[TILES_PER_PAGE];
-static lv_obj_t *s_tile_unit[TILES_PER_PAGE];
-static tier_t s_tile_tier[TILES_PER_PAGE];
-static bool s_tile_text[TILES_PER_PAGE];
+typedef struct {
+    lv_obj_t *box;
+    lv_obj_t *fill;
+    lv_obj_t *edge;
+    lv_obj_t *label;
+    lv_obj_t *value;
+    lv_obj_t *unit;
+    tier_t tier;
+    bool is_text;
+    int hue;     /* -1 before the first render */
+    int fill_px; /* the fill's target height; -1 = hidden */
+} tile_view_t;
+static tile_view_t s_tile[TILES_PER_PAGE];
+static int s_last_page = -1;
+static bool s_animate = true;
 /* Detail */
 static lv_obj_t *s_d_clock, *s_d_col[2], *s_d_footer;
 /* NO DATA */
-static lv_obj_t *s_n_age, *s_n_caption;
+static lv_obj_t *s_n_age, *s_n_hint;
 
 static view_cb_t s_on_tap, s_on_long_press;
 
@@ -67,16 +79,6 @@ static const lv_font_t *tier_font(tier_t t)
     return &jbm_text_36;
 }
 
-static uint32_t tone_color(tone_t t)
-{
-    switch (t) {
-    case TONE_AMBER: return C_AMBER;
-    case TONE_RED: return C_RED;
-    case TONE_NEUTRAL: break;
-    }
-    return C_VALUE;
-}
-
 static lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h)
 {
     lv_obj_t *o = lv_obj_create(parent);
@@ -88,13 +90,11 @@ static lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h)
     return o;
 }
 
-static lv_obj_t *dot(lv_obj_t *parent, int x, int y, int d, uint32_t color)
+static void paint(lv_obj_t *o, uint32_t color, int radius)
 {
-    lv_obj_t *o = box(parent, x, y, d, d);
-    lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(o, lv_color_hex(color), 0);
     lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
-    return o;
+    lv_obj_set_style_radius(o, radius, 0);
 }
 
 static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, int x, int y,
@@ -119,13 +119,9 @@ static void set_text(lv_obj_t *l, const char *text)
     }
 }
 
-static void set_color(lv_obj_t *o, uint32_t color, bool text)
+static void set_text_color(lv_obj_t *o, uint32_t color)
 {
-    if (text) {
-        lv_obj_set_style_text_color(o, lv_color_hex(color), 0);
-    } else {
-        lv_obj_set_style_bg_color(o, lv_color_hex(color), 0);
-    }
+    lv_obj_set_style_text_color(o, lv_color_hex(color), 0);
 }
 
 /* Top-left y for a label in `font` whose baseline must sit at `baseline`. */
@@ -134,22 +130,22 @@ static int y_for_baseline(const lv_font_t *font, int baseline)
     return baseline - (font->line_height - font->base_line);
 }
 
-/* Put a value label in its tier's font and alignment. Numbers are right-
- * aligned against the same edge, so the last digit keeps its column. */
-static void style_value(int i, tier_t tier, bool is_text)
+/* Numbers are right-aligned against one edge, so the last digit keeps its
+ * column. Names are left-aligned and cut with "...". */
+static void style_value(tile_view_t *t, tier_t tier, bool is_text)
 {
-    if (s_tile_tier[i] == tier && s_tile_text[i] == is_text) {
+    if (t->tier == tier && t->is_text == is_text) {
         return;
     }
-    lv_obj_t *v = s_tile_value[i];
     const lv_font_t *font = tier_font(tier);
-    lv_obj_set_style_text_font(v, font, 0);
-    lv_obj_set_pos(v, TILE_PAD, y_for_baseline(font, VALUE_BASELINE));
-    lv_obj_set_style_text_align(v, is_text ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_RIGHT, 0);
-    lv_label_set_long_mode(v, is_text ? LV_LABEL_LONG_MODE_DOTS : LV_LABEL_LONG_MODE_CLIP);
-    lv_obj_set_height(v, font->line_height);
-    s_tile_tier[i] = tier;
-    s_tile_text[i] = is_text;
+    lv_obj_set_style_text_font(t->value, font, 0);
+    lv_obj_set_pos(t->value, VALUE_PAD, y_for_baseline(font, VALUE_BASELINE));
+    lv_obj_set_style_text_align(t->value, is_text ? LV_TEXT_ALIGN_LEFT : LV_TEXT_ALIGN_RIGHT, 0);
+    lv_label_set_long_mode(t->value,
+                           is_text ? LV_LABEL_LONG_MODE_DOTS : LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_set_height(t->value, font->line_height);
+    t->tier = tier;
+    t->is_text = is_text;
 }
 
 static void on_event(lv_event_t *e)
@@ -163,80 +159,121 @@ static void on_event(lv_event_t *e)
     }
 }
 
+/*
+ * The big outer corner. LVGL gives one radius per object, so each tile is
+ * drawn with small corners and a black quarter-ring is laid over its outer
+ * corner: an arc centred where the big corner's centre is, from radius
+ * OUTER_R out past the square's corner. It hides the tile outside the curve
+ * and paints only black ground elsewhere.
+ */
+static void corner_mask(lv_obj_t *parent, int cx, int cy, int start_deg)
+{
+    const int ro = OUTER_R * 1415 / 1000 + 3;
+    lv_obj_t *a = lv_arc_create(parent);
+    lv_obj_remove_style_all(a);
+    lv_obj_set_size(a, 2 * ro, 2 * ro);
+    lv_obj_set_pos(a, cx - ro, cy - ro);
+    lv_obj_set_clickable(a, false);
+    lv_arc_set_bg_angles(a, (lv_value_precise_t)start_deg, (lv_value_precise_t)(start_deg + 90));
+    lv_obj_set_style_arc_width(a, ro - OUTER_R, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(a, lv_color_hex(COLOR_GROUND), LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(a, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_arc_rounded(a, false, LV_PART_MAIN);
+}
+
+static void build_tile(int i)
+{
+    tile_view_t *t = &s_tile[i];
+    int x = MARGIN + (i % 2) * (TILE_W + GAP);
+    int y = GRID_Y + (i / 2) * (TILE_H + GAP);
+    t->box = box(s_pages, x, y, TILE_W, TILE_H);
+    paint(t->box, hue_colors(HUE_BRONZE)->base, INNER_R);
+
+    t->fill = box(t->box, 0, 0, TILE_W, 0);
+    paint(t->fill, hue_colors(HUE_BRONZE)->fill, INNER_R);
+    lv_obj_align(t->fill, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_hidden(t->fill, true);
+    t->fill_px = -1;
+
+    t->edge = box(t->box, INNER_R, 0, TILE_W - 2 * INNER_R, EDGE_H);
+    paint(t->edge, 0, 0);
+    lv_obj_set_hidden(t->edge, true);
+
+    t->label = label(t->box, &brl_30, 0, TILE_PAD, LABEL_Y, TEXT_W, LV_TEXT_ALIGN_LEFT);
+    t->value = label(t->box, &jbm_num_110, COLOR_VALUE, VALUE_PAD, 0, VALUE_W,
+                     LV_TEXT_ALIGN_RIGHT);
+    t->tier = TIER_TEXT;
+    t->is_text = true;
+    style_value(t, TIER_XL, false);
+    t->unit = label(t->box, &brl_30, 0, TILE_PAD, UNIT_BOTTOM - brl_30.line_height, TEXT_W,
+                    LV_TEXT_ALIGN_RIGHT);
+    t->hue = -1;
+}
+
 static void build_pages(void)
 {
     s_pages = box(s_root, 0, 0, W, W);
-
-    /* Strip: link dot and state at the left, clock in the middle, page dots
-     * at the right. */
-    s_dot = dot(s_pages, MARGIN + 4, STRIP_Y + 13, 14, C_LIVE);
-    s_status = label(s_pages, &font_medium, C_LABEL, MARGIN + 28, STRIP_Y + 4, 150,
-                     LV_TEXT_ALIGN_LEFT);
-    s_clock = label(s_pages, &font_medium, C_VALUE, W / 2 - 70, STRIP_Y + 4, 140,
-                    LV_TEXT_ALIGN_CENTER);
-    for (int i = 0; i < PAGE_COUNT; i++) {
-        int x = W - MARGIN - 4 - 10 - (PAGE_COUNT - 1 - i) * 20;
-        s_page_dot[i] = dot(s_pages, x, STRIP_Y + 15, 10, C_DOT_OFF);
-    }
-
     for (int i = 0; i < TILES_PER_PAGE; i++) {
-        int x = MARGIN + (i % 2) * (TILE_W + GAP);
-        int y = GRID_Y + (i / 2) * (TILE_H + GAP);
-        lv_obj_t *tile = box(s_pages, x, y, TILE_W, TILE_H);
-        lv_obj_t *frame = box(tile, 0, 0, TILE_W, TILE_H);
-        lv_obj_set_style_border_color(frame, lv_color_hex(C_BORDER), 0);
-        lv_obj_set_style_border_width(frame, 2, 0);
-        lv_obj_set_style_radius(frame, 18, 0);
-
-        s_tile_label[i] = label(tile, &font_medium, C_LABEL, TILE_PAD + 2, LABEL_Y, TEXT_W,
-                                LV_TEXT_ALIGN_LEFT);
-        s_tile_value[i] = label(tile, &jbm_num_110, C_VALUE, TILE_PAD, 0, TEXT_W,
-                                LV_TEXT_ALIGN_RIGHT);
-        s_tile_tier[i] = TIER_TEXT;
-        s_tile_text[i] = true;
-        style_value(i, TIER_XL, false);
-        s_tile_unit[i] = label(tile, &font_unit, C_UNIT, TILE_PAD, UNIT_BOTTOM -
-                               font_unit.line_height, TEXT_W, LV_TEXT_ALIGN_RIGHT);
+        build_tile(i);
     }
+    /* Outer corners: top-left 180-270 deg, top-right 270-360, bottom-left
+     * 90-180, bottom-right 0-90 (LVGL: 0 deg is 3 o'clock, clockwise). */
+    const int l = MARGIN, r = MARGIN + 2 * TILE_W + GAP;
+    const int top = GRID_Y, bottom = GRID_Y + 2 * TILE_H + GAP;
+    corner_mask(s_pages, l + OUTER_R, top + OUTER_R, 180);
+    corner_mask(s_pages, r - OUTER_R, top + OUTER_R, 270);
+    corner_mask(s_pages, l + OUTER_R, bottom - OUTER_R, 90);
+    corner_mask(s_pages, r - OUTER_R, bottom - OUTER_R, 0);
+
+    /* Strip, drawn last so no mask can cover it: title left; stale age,
+     * clock and link dot right. */
+    s_title = label(s_pages, &brl_32, COLOR_TITLE, MARGIN + 4, STRIP_Y + 4, 200,
+                    LV_TEXT_ALIGN_LEFT);
+    const int dot = 14;
+    const int dot_x = W - MARGIN - 4 - dot;
+    s_dot = box(s_pages, dot_x, STRIP_Y + 18, dot, dot);
+    paint(s_dot, COLOR_DOT_LIVE, LV_RADIUS_CIRCLE);
+    s_clock = label(s_pages, &brl_30, COLOR_CLOCK, dot_x - 12 - 80, STRIP_Y + 6, 80,
+                    LV_TEXT_ALIGN_RIGHT);
+    s_stale = label(s_pages, &brl_30, COLOR_STALE, dot_x - 12 - 80 - 140, STRIP_Y + 6, 130,
+                    LV_TEXT_ALIGN_RIGHT);
 }
 
 static void build_detail(void)
 {
     s_detail = box(s_root, 0, 0, W, W);
-    const int inner = W - 2 * 28;
-    lv_obj_t *title = label(s_detail, &font_medium, C_VALUE, 28, 24, inner / 2,
-                            LV_TEXT_ALIGN_LEFT);
-    lv_label_set_text(title, "Temps");
-    s_d_clock = label(s_detail, &font_medium, C_VALUE, W / 2, 24, inner / 2,
-                      LV_TEXT_ALIGN_RIGHT);
+    const int x = 28, inner = W - 2 * 28;
+    lv_obj_t *title =
+        label(s_detail, &brl_32, COLOR_TITLE, x, 20, inner - 90, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(title, "All temperatures");
+    s_d_clock = label(s_detail, &brl_30, COLOR_CLOCK, W - x - 90, 22, 90, LV_TEXT_ALIGN_RIGHT);
     for (int i = 0; i < 2; i++) {
-        s_d_col[i] = label(s_detail, &font_small, C_VALUE, 28 + i * (inner / 2), 72,
+        s_d_col[i] = label(s_detail, &brl_30, COLOR_TEXT, x + i * (inner / 2), 76,
                            inner / 2 - 8, LV_TEXT_ALIGN_LEFT);
         lv_obj_set_style_text_line_space(s_d_col[i], 4, 0);
     }
-    /* Three lines of Montserrat 20, ending above the bottom margin. */
-    s_d_footer = label(s_detail, &font_small, C_LABEL, 28, 372, inner, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_height(s_d_footer, 3 * (font_small.line_height + 2));
+    /* Three lines of Barlow 24, ending above the bottom margin. */
+    s_d_footer = label(s_detail, &brl_24, COLOR_TEXT_MUTED, x, 362, inner, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_height(s_d_footer, 3 * (brl_24.line_height + 2));
     lv_label_set_long_mode(s_d_footer, LV_LABEL_LONG_MODE_WRAP);
 }
 
+/* NO DATA can stay up for hours: black, no fills, text only. */
 static void build_nodata(void)
 {
     s_nodata = box(s_root, 0, 0, W, W);
-    lv_obj_t *head = label(s_nodata, &font_large, C_NODATA, 0, 104, W, LV_TEXT_ALIGN_CENTER);
-    lv_label_set_text(head, "NO DATA");
-    lv_obj_t *sub = label(s_nodata, &font_medium, C_LABEL, 0, 172, W, LV_TEXT_ALIGN_CENTER);
-    lv_label_set_text(sub, "DGX not sending");
-    s_n_caption = label(s_nodata, &font_medium, C_LABEL, 0, 250, W, LV_TEXT_ALIGN_CENTER);
-    s_n_age = label(s_nodata, &jbm_num_82, C_VALUE, 0, 290, W, LV_TEXT_ALIGN_CENTER);
+    lv_obj_t *head =
+        label(s_nodata, &brl_44, COLOR_NO_DATA_HEAD, 0, 120, W, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_text(head, "No data from the DGX");
+    s_n_age = label(s_nodata, &jbm_num_82, COLOR_VALUE, 0, 196, W, LV_TEXT_ALIGN_CENTER);
+    s_n_hint = label(s_nodata, &brl_30, COLOR_TEXT, 0, 318, W, LV_TEXT_ALIGN_CENTER);
 }
 
 void view_init(lv_obj_t *screen, view_cb_t on_tap, view_cb_t on_long_press)
 {
-    fonts_init();
     s_on_tap = on_tap;
     s_on_long_press = on_long_press;
-    lv_obj_set_style_bg_color(screen, lv_color_hex(C_BG), 0);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(COLOR_GROUND), 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_set_scrollable(screen, false);
 
@@ -250,6 +287,11 @@ void view_init(lv_obj_t *screen, view_cb_t on_tap, view_cb_t on_long_press)
     build_nodata();
     lv_obj_set_hidden(s_pages, true);
     lv_obj_set_hidden(s_detail, true);
+}
+
+void view_set_animations(bool on)
+{
+    s_animate = on;
 }
 
 void view_model_fill(view_model_t *m, const status_frame_t *f, link_state_t st,
@@ -268,31 +310,77 @@ void view_model_fill(view_model_t *m, const status_frame_t *f, link_state_t st,
     fmt_age(m->age, sizeof(m->age), age_s);
 }
 
+static void fill_height_cb(void *obj, int32_t h)
+{
+    lv_obj_set_height((lv_obj_t *)obj, h);
+}
+
+/* Move the level fill to `px`. Animated (ease out) when the same tile on the
+ * same page changes value; set at once on a page change. */
+static void set_fill(tile_view_t *t, int px, bool animate)
+{
+    if (px == t->fill_px) {
+        return;
+    }
+    lv_anim_delete(t->fill, fill_height_cb);
+    if (px < 0) {
+        lv_obj_set_hidden(t->fill, true);
+    } else if (animate && t->fill_px >= 0) {
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, t->fill);
+        lv_anim_set_exec_cb(&a, fill_height_cb);
+        lv_anim_set_values(&a, lv_obj_get_height(t->fill), px);
+        lv_anim_set_duration(&a, FILL_ANIM_MS);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_start(&a);
+    } else {
+        lv_obj_set_height(t->fill, px);
+        lv_obj_set_hidden(t->fill, false);
+    }
+    t->fill_px = px;
+}
+
+static void render_tile(tile_view_t *t, const tile_t *m, bool same_page)
+{
+    if (t->hue != (int)m->hue) {
+        const hue_colors_t *c = hue_colors(m->hue);
+        paint(t->box, c->base, INNER_R);
+        lv_obj_set_style_bg_color(t->fill, lv_color_hex(c->fill), 0);
+        set_text_color(t->label, c->tint);
+        set_text_color(t->unit, c->tint);
+        lv_obj_set_hidden(t->edge, c->edge == 0);
+        if (c->edge) {
+            lv_obj_set_style_bg_color(t->edge, lv_color_hex(c->edge), 0);
+        }
+        t->hue = (int)m->hue;
+    }
+    style_value(t, m->tier, m->is_text);
+    set_text(t->label, m->label ? m->label : "");
+    set_text(t->value, m->value);
+    set_text(t->unit, m->unit);
+    int px = m->fill < 0 ? -1 : (int)(m->fill * (float)TILE_H + 0.5f);
+    set_fill(t, px, s_animate && same_page);
+}
+
 static void render_pages(const view_model_t *m)
 {
-    char line[48];
-    if (m->link == LINK_LIVE) {
-        set_text(s_status, "LIVE");
-        set_color(s_dot, C_LIVE, false);
-        set_color(s_status, C_LABEL, true);
-    } else {
-        snprintf(line, sizeof(line), "STALE %s", m->age);
-        set_text(s_status, line);
-        set_color(s_dot, C_AMBER, false);
-        set_color(s_status, C_AMBER, true);
-    }
+    set_text(s_title, page_name(m->page));
     set_text(s_clock, m->clock);
-    for (int i = 0; i < PAGE_COUNT; i++) {
-        set_color(s_page_dot[i], i == (int)m->page ? C_DOT_ON : C_DOT_OFF, false);
+    if (m->link == LINK_LIVE) {
+        set_text(s_stale, "");
+        lv_obj_set_style_bg_color(s_dot, lv_color_hex(COLOR_DOT_LIVE), 0);
+    } else {
+        char line[40];
+        snprintf(line, sizeof(line), "Stale %s", m->age);
+        set_text(s_stale, line);
+        lv_obj_set_style_bg_color(s_dot, lv_color_hex(COLOR_STALE), 0);
     }
+    bool same_page = s_last_page == (int)m->page;
     for (int i = 0; i < TILES_PER_PAGE; i++) {
-        const tile_t *t = &m->tiles[i];
-        style_value(i, t->tier, t->is_text);
-        set_text(s_tile_label[i], t->label ? t->label : "");
-        set_text(s_tile_value[i], t->value);
-        set_color(s_tile_value[i], tone_color(t->tone), true);
-        set_text(s_tile_unit[i], t->unit);
+        render_tile(&s_tile[i], &m->tiles[i], same_page);
     }
+    s_last_page = (int)m->page;
 }
 
 static void render_detail(const view_model_t *m)
@@ -315,17 +403,22 @@ static void render_detail(const view_model_t *m)
         set_text(s_d_col[c], f->n_temps ? col[c] : (c == 0 ? FMT_DASH : ""));
     }
     snprintf(line, sizeof(line),
-             "%s, fw %s\nframes %lu, rejected %lu\nstack free: rx %lu B, ui %lu B", f->host,
+             "%s, fw %s\nFrames %lu, rejected %lu\nStack free: rx %lu B, ui %lu B", f->host,
              m->fw_version ? m->fw_version : "?", (unsigned long)m->accepted,
              (unsigned long)m->rejected, (unsigned long)m->stack_free_rx,
              (unsigned long)m->stack_free_ui);
     set_text(s_d_footer, line);
+    s_last_page = -1;
 }
 
 static void render_nodata(const view_model_t *m)
 {
-    set_text(s_n_caption, strcmp(m->age, "never") == 0 ? "no frame since boot" : "last frame");
-    set_text(s_n_age, strcmp(m->age, "never") == 0 ? "" : m->age);
+    bool never = strcmp(m->age, "never") == 0;
+    set_text(s_n_age, never ? "" : m->age);
+    set_text(s_n_hint, never ? "No frame since boot.\nCheck that dgx-status is running."
+                             : "Check that dgx-status is running.");
+    lv_label_set_long_mode(s_n_hint, LV_LABEL_LONG_MODE_WRAP);
+    s_last_page = -1;
 }
 
 void view_render(const view_model_t *m)
@@ -347,5 +440,5 @@ void view_set_shift(int dx, int dy)
 
 lv_obj_t *view_tile_value(int i)
 {
-    return s_tile_value[i];
+    return s_tile[i].value;
 }
