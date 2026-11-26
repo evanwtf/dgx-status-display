@@ -1,0 +1,48 @@
+# HELP llme_engine_phase_seconds_total Engine clock: wall time the engine spent in the phase. Overlap is counted once.
+# TYPE llme_engine_phase_seconds_total counter
+llme_engine_phase_seconds_total{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1",phase="prefill",worker="default"} 0
+# HELP llme_engine_up 1 if the exporter got telemetry from this identified engine on its last attempt, else 0.
+# TYPE llme_engine_up gauge
+llme_engine_up{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1"} 1
+# HELP llme_exporter_arm_info Registration and build metadata for this arm. adapter_version changes when the adapter's mapping changes. Always 1.
+# TYPE llme_exporter_arm_info gauge
+llme_exporter_arm_info{adapter_version="1",backend="demo",engine="llamacpp",exporter_version="0.1.0",host="test-host",issue="",model="smollm2-135m",nodes="1"} 1
+# HELP llme_exporter_last_success_timestamp_seconds Unix time of the last collection that got telemetry. 0 if none has.
+# TYPE llme_exporter_last_success_timestamp_seconds gauge
+llme_exporter_last_success_timestamp_seconds{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1"} 1.7957177261485438e+09
+# HELP llme_exporter_metric_available 1 when this collection provides the named measurement, including measured zero; 0 when unavailable.
+# TYPE llme_exporter_metric_available gauge
+llme_exporter_metric_available{backend="demo",engine="llamacpp",host="test-host",metric="llme_prompt_cached_tokens_total",model="smollm2-135m",nodes="1",phase="none"} 1
+llme_exporter_metric_available{backend="demo",engine="llamacpp",host="test-host",metric="llme_tokens_total",model="smollm2-135m",nodes="1",phase="decode"} 1
+llme_exporter_metric_available{backend="demo",engine="llamacpp",host="test-host",metric="llme_tokens_total",model="smollm2-135m",nodes="1",phase="prefill"} 1
+# HELP llme_exporter_registration_mismatch 1 if the engine serves no model named served_model in the registration.
+# TYPE llme_exporter_registration_mismatch gauge
+llme_exporter_registration_mismatch{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1"} 0
+# HELP llme_exporter_scrape_errors_total Failed collection attempts for this arm since its registration appeared.
+# TYPE llme_exporter_scrape_errors_total counter
+llme_exporter_scrape_errors_total{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1"} 0
+# HELP llme_exporter_telemetry_backlog_bytes Unread telemetry bytes. Nonzero means counters are withheld until catch-up.
+# TYPE llme_exporter_telemetry_backlog_bytes gauge
+llme_exporter_telemetry_backlog_bytes{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1"} 0
+# HELP llme_prompt_cached_tokens_total Prompt tokens reused from a cache instead of computed.
+# TYPE llme_prompt_cached_tokens_total counter
+llme_prompt_cached_tokens_total{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1",worker="default"} 0
+# HELP llme_request_phase_seconds_total Request clock: each request's own phase interval, summed over requests. Overlapping requests are all counted.
+# TYPE llme_request_phase_seconds_total counter
+llme_request_phase_seconds_total{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1",phase="decode",worker="default"} 0
+# HELP llme_requests_running Requests the engine is processing now.
+# TYPE llme_requests_running gauge
+llme_requests_running{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1",worker="default"} 0
+# HELP llme_spec_accepted_tokens_total Speculative draft tokens the target model kept.
+# TYPE llme_spec_accepted_tokens_total counter
+llme_spec_accepted_tokens_total{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1",worker="default"} 0
+# HELP llme_spec_draft_tokens_total Speculative draft tokens proposed. Never includes the free first token.
+# TYPE llme_spec_draft_tokens_total counter
+llme_spec_draft_tokens_total{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1",worker="default"} 0
+# HELP llme_spec_verify_steps_total Speculative verification steps that proposed at least one token.
+# TYPE llme_spec_verify_steps_total counter
+llme_spec_verify_steps_total{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1",worker="default"} 0
+# HELP llme_tokens_total Tokens processed. phase=prefill counts prompt tokens the engine computed, excluding cache hits; phase=decode counts generated tokens.
+# TYPE llme_tokens_total counter
+llme_tokens_total{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1",phase="decode",worker="default"} 0
+llme_tokens_total{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1",phase="prefill",worker="default"} 0

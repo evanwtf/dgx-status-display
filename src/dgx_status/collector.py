@@ -16,6 +16,7 @@ from pathlib import Path
 from dgx_status import netio, procfs, storage, sysfs
 from dgx_status.frame import Snapshot
 from dgx_status.gpu import GpuReader
+from dgx_status.llm import LlmReading
 from dgx_status.occupant import OccupantNamer
 from dgx_status.rates import RateTracker, Sample
 
@@ -55,6 +56,7 @@ class Collector:
         monotonic: Callable[[], float] = time.monotonic,
         sources: Sources | None = None,
         statvfs: storage.Statvfs = os.statvfs,
+        llm: Callable[[], LlmReading | None] | None = None,
     ) -> None:
         self._proc = proc_root
         self._sys = sys_root
@@ -64,6 +66,7 @@ class Collector:
         self._monotonic = monotonic
         self._src = sources or Sources()
         self._statvfs = statvfs
+        self._llm = llm
         self._prev_cpu: procfs.CpuTimes | None = None
         self._occupant = OccupantNamer(proc_root)
         bits = 8.0
@@ -165,4 +168,21 @@ class Collector:
         now = self._monotonic()
         self._network(s, now)
         self._storage(s, now)
+        self._llm_fields(s)
         return s
+
+    def _llm_fields(self, s: Snapshot) -> None:
+        """Copy the poller's newest reading. It never blocks on the network."""
+        r = self._llm() if self._llm is not None else None
+        if r is None:
+            return
+        s.llm_up = r.engines_up
+        if r.engines_up == 0:
+            return
+        s.llm_model = r.models
+        s.llm_out_tps = r.out_tps
+        s.llm_in_tps = r.in_tps
+        s.llm_req = r.requests
+        s.llm_kv_pct = r.kv_pct
+        s.llm_spec_pct = r.spec_pct
+        s.llm_ttft_ms = r.ttft_ms

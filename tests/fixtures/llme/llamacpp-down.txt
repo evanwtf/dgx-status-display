@@ -1,0 +1,23 @@
+# HELP llme_engine_up 1 if the exporter got telemetry from this identified engine on its last attempt, else 0.
+# TYPE llme_engine_up gauge
+llme_engine_up{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1"} 0
+# HELP llme_exporter_arm_info Registration and build metadata for this arm. adapter_version changes when the adapter's mapping changes. Always 1.
+# TYPE llme_exporter_arm_info gauge
+llme_exporter_arm_info{adapter_version="1",backend="demo",engine="llamacpp",exporter_version="0.1.0",host="test-host",issue="",model="smollm2-135m",nodes="1"} 1
+# HELP llme_exporter_last_success_timestamp_seconds Unix time of the last collection that got telemetry. 0 if none has.
+# TYPE llme_exporter_last_success_timestamp_seconds gauge
+llme_exporter_last_success_timestamp_seconds{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1"} 1.7957177261551337e+09
+# HELP llme_exporter_metric_available 1 when this collection provides the named measurement, including measured zero; 0 when unavailable.
+# TYPE llme_exporter_metric_available gauge
+llme_exporter_metric_available{backend="demo",engine="llamacpp",host="test-host",metric="llme_prompt_cached_tokens_total",model="smollm2-135m",nodes="1",phase="none"} 0
+llme_exporter_metric_available{backend="demo",engine="llamacpp",host="test-host",metric="llme_tokens_total",model="smollm2-135m",nodes="1",phase="decode"} 0
+llme_exporter_metric_available{backend="demo",engine="llamacpp",host="test-host",metric="llme_tokens_total",model="smollm2-135m",nodes="1",phase="prefill"} 0
+# HELP llme_exporter_registration_mismatch 1 if the engine serves no model named served_model in the registration.
+# TYPE llme_exporter_registration_mismatch gauge
+llme_exporter_registration_mismatch{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1"} 0
+# HELP llme_exporter_scrape_errors_total Failed collection attempts for this arm since its registration appeared.
+# TYPE llme_exporter_scrape_errors_total counter
+llme_exporter_scrape_errors_total{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1"} 1
+# HELP llme_exporter_telemetry_backlog_bytes Unread telemetry bytes. Nonzero means counters are withheld until catch-up.
+# TYPE llme_exporter_telemetry_backlog_bytes gauge
+llme_exporter_telemetry_backlog_bytes{backend="demo",engine="llamacpp",host="test-host",model="smollm2-135m",nodes="1"} 0

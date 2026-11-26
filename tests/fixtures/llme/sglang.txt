@@ -1,0 +1,59 @@
+# HELP llme_engine_up 1 if the exporter got telemetry from this identified engine on its last attempt, else 0.
+# TYPE llme_engine_up gauge
+llme_engine_up{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2"} 1
+# HELP llme_exporter_arm_info Registration and build metadata for this arm. adapter_version changes when the adapter's mapping changes. Always 1.
+# TYPE llme_exporter_arm_info gauge
+llme_exporter_arm_info{adapter_version="2",backend="demo2",engine="sglang",exporter_version="0.1.0",host="test-host",issue="",model="MiMo-v2.6-Flash",nodes="2"} 1
+# HELP llme_exporter_last_success_timestamp_seconds Unix time of the last collection that got telemetry. 0 if none has.
+# TYPE llme_exporter_last_success_timestamp_seconds gauge
+llme_exporter_last_success_timestamp_seconds{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2"} 1.7957177359627714e+09
+# HELP llme_exporter_metric_available 1 when this collection provides the named measurement, including measured zero; 0 when unavailable.
+# TYPE llme_exporter_metric_available gauge
+llme_exporter_metric_available{backend="demo2",engine="sglang",host="test-host",metric="llme_prompt_cached_tokens_total",model="MiMo-v2.6-Flash",nodes="2",phase="none"} 1
+llme_exporter_metric_available{backend="demo2",engine="sglang",host="test-host",metric="llme_tokens_total",model="MiMo-v2.6-Flash",nodes="2",phase="decode"} 1
+llme_exporter_metric_available{backend="demo2",engine="sglang",host="test-host",metric="llme_tokens_total",model="MiMo-v2.6-Flash",nodes="2",phase="prefill"} 1
+# HELP llme_exporter_registration_mismatch 1 if the engine serves no model named served_model in the registration.
+# TYPE llme_exporter_registration_mismatch gauge
+llme_exporter_registration_mismatch{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2"} 0
+# HELP llme_exporter_scrape_errors_total Failed collection attempts for this arm since its registration appeared.
+# TYPE llme_exporter_scrape_errors_total counter
+llme_exporter_scrape_errors_total{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2"} 0
+# HELP llme_exporter_telemetry_backlog_bytes Unread telemetry bytes. Nonzero means counters are withheld until catch-up.
+# TYPE llme_exporter_telemetry_backlog_bytes gauge
+llme_exporter_telemetry_backlog_bytes{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2"} 0
+# HELP llme_kv_cache_usage_ratio KV-cache usage, 0 to 1.
+# TYPE llme_kv_cache_usage_ratio gauge
+llme_kv_cache_usage_ratio{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default"} 0.14
+# HELP llme_prompt_cached_tokens_total Prompt tokens reused from a cache instead of computed.
+# TYPE llme_prompt_cached_tokens_total counter
+llme_prompt_cached_tokens_total{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default"} 3.829888e+06
+# HELP llme_requests_running Requests the engine is processing now.
+# TYPE llme_requests_running gauge
+llme_requests_running{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default"} 1
+# HELP llme_time_to_first_token_seconds Time to first token, in the engine's own buckets.
+# TYPE llme_time_to_first_token_seconds histogram
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="0.1"} 0
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="0.2"} 0
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="0.4"} 36
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="0.6"} 76
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="0.8"} 90
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="1"} 106
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="2"} 141
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="4"} 166
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="6"} 171
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="8"} 172
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="10"} 177
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="20"} 177
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="40"} 177
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="60"} 177
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="80"} 180
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="100"} 182
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="200"} 182
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="400"} 183
+llme_time_to_first_token_seconds_bucket{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default",le="+Inf"} 183
+llme_time_to_first_token_seconds_sum{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default"} 854.3810183340029
+llme_time_to_first_token_seconds_count{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",worker="default"} 183
+# HELP llme_tokens_total Tokens processed. phase=prefill counts prompt tokens the engine computed, excluding cache hits; phase=decode counts generated tokens.
+# TYPE llme_tokens_total counter
+llme_tokens_total{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",phase="decode",worker="default"} 156755
+llme_tokens_total{backend="demo2",engine="sglang",host="test-host",model="MiMo-v2.6-Flash",nodes="2",phase="prefill",worker="default"} 971400

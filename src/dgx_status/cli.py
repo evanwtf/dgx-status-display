@@ -19,6 +19,8 @@ from dgx_status import __version__, logging_setup
 from dgx_status.collector import Collector, Sources
 from dgx_status.daemon import LogSink, Sink, run
 from dgx_status.gpu import NvmlGpu
+from dgx_status.llm import DEFAULT_URL as LLM_DEFAULT_URL
+from dgx_status.llm import LlmPoller
 from dgx_status.serial_link import DEFAULT_DEVICE_GLOB, SerialLink, open_port
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,7 @@ ENV_ROCE = "DGX_STATUS_ROCE_PORTS"
 ENV_CLUSTER = "DGX_STATUS_CLUSTER_IFACES"
 ENV_SSD = "DGX_STATUS_SSD_DISK"
 ENV_DISK_PATH = "DGX_STATUS_DISK_PATH"
+ENV_LLM_URL = "DGX_STATUS_LLM_URL"
 
 
 def _names(value: str | None) -> tuple[str, ...] | None:
@@ -95,6 +98,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         sink = SerialLink(args.device, opener=open_port, clock=time.monotonic)
 
+    llm_url = os.environ.get(ENV_LLM_URL) or LLM_DEFAULT_URL
+    poller: LlmPoller | None = None
+    if llm_url.lower() != "off":
+        poller = LlmPoller(llm_url)
+        poller.start()
     collector = Collector(
         proc_root=args.proc,
         sys_root=args.sys,
@@ -102,6 +110,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         host=short_hostname(),
         clock=time.time,
         sources=sources_from_env(os.environ),
+        llm=poller.reading if poller is not None else None,
     )
     logger.info(
         "dgx-status %s: %s every %.1f s",

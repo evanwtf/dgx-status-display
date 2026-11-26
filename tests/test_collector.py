@@ -254,3 +254,28 @@ def test_no_installed_memory_view_leaves_total_unknown(live_root: Path) -> None:
     s = _collector(live_root, GpuReading()).snapshot()
     assert s.mem_total_gib is None
     assert s.mem_used_gib == pytest.approx(8073776 / 1024 / 1024)
+
+
+def test_llm_reading_is_copied_into_the_frame(live_root: Path) -> None:
+    from dgx_status.llm import LlmReading
+
+    reading: LlmReading | None = LlmReading(
+        engines_up=1, models="m", out_tps=45.0, in_tps=2000.0, requests=3, kv_pct=62.0
+    )
+    c = Collector(
+        proc_root=live_root / "proc",
+        sys_root=live_root / "sys",
+        gpu=FakeGpu(GpuReading()),
+        host="test-host",
+        clock=lambda: 1.0,
+        monotonic=FakeClock(),
+        statvfs=fake_statvfs,
+        llm=lambda: reading,
+    )
+    s = c.snapshot()
+    assert (s.llm_up, s.llm_out_tps, s.llm_req, s.llm_kv_pct) == (1, 45.0, 3, 62.0)
+    reading = LlmReading(engines_up=0)
+    s = c.snapshot()
+    assert s.llm_up == 0 and s.llm_out_tps is None
+    reading = None
+    assert c.snapshot().llm_up is None
