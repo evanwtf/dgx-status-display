@@ -3,10 +3,26 @@
 #include <math.h>
 #include <string.h>
 
-/* Stored units: x10 for everything but fan RPM (13500 x 10 would overflow). */
+#include "tiles.h"
+
+/* Stored units, chosen so the full scale fits int16 (32767):
+ * fans in RPM; the LAN and the SSD in Mb/s and MB/s (up to 32 Gb/s,
+ * 32 GB/s); RoCE and cluster IP in hundredths of Gb/s (up to 327 Gb/s);
+ * everything else in tenths. */
 static float unit_scale(hist_metric_t m)
 {
-    return (m == HIST_FAN0 || m == HIST_FAN1) ? 1.0f : 10.0f;
+    switch (m) {
+    case HIST_FAN0:
+    case HIST_FAN1: return 1.0f;
+    case HIST_LAN_RX:
+    case HIST_LAN_TX:
+    case HIST_SSD_RD:
+    case HIST_SSD_WR: return 1e-6f;
+    case HIST_ROCE_RX:
+    case HIST_ROCE_TX:
+    case HIST_CIP: return 1e-7f;
+    default: return 10.0f;
+    }
 }
 
 static float frame_value(const status_frame_t *f, hist_metric_t m)
@@ -21,6 +37,13 @@ static float frame_value(const status_frame_t *f, hist_metric_t m)
     case HIST_NVME_C: return f->nvme_c;
     case HIST_CPU_PCT: return f->cpu_pct;
     case HIST_MEM_GIB: return f->mem_used_gib;
+    case HIST_LAN_RX: return (float)f->lan_rx_bps;
+    case HIST_LAN_TX: return (float)f->lan_tx_bps;
+    case HIST_ROCE_RX: return (float)f->roce_rx_bps;
+    case HIST_ROCE_TX: return (float)f->roce_tx_bps;
+    case HIST_CIP: return (float)f->cip_bps;
+    case HIST_SSD_RD: return (float)f->ssd_rd_bytes_s;
+    case HIST_SSD_WR: return (float)f->ssd_wr_bytes_s;
     default: return NAN;
     }
 }
@@ -100,6 +123,19 @@ bool hist_scale(hist_metric_t m, const status_frame_t *f, float *lo, float *hi)
             return true;
         }
         return false;
+    case HIST_LAN_RX:
+    case HIST_LAN_TX:
+        if (f && isfinite(f->lan_mbps) && f->lan_mbps > 0) {
+            *lo = 0;
+            *hi = (float)(f->lan_mbps * 1e6);
+            return true;
+        }
+        return false;
+    case HIST_ROCE_RX:
+    case HIST_ROCE_TX:
+    case HIST_CIP: *lo = 0; *hi = (float)NIC_FULL_SCALE_BPS; return true;
+    case HIST_SSD_RD:
+    case HIST_SSD_WR: *lo = 0; *hi = (float)SSD_FULL_SCALE_BYTES_S; return true;
     default: return false;
     }
 }

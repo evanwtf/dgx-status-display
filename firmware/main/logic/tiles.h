@@ -1,7 +1,7 @@
 /*
  * The carousel pages as data. Pure C.
  *
- * Three pages of four tiles. Each tile has a label, one big value and a
+ * Five pages of four tiles. Each tile has a label, one big value and a
  * unit. The view draws a tile; this module decides what goes in it.
  *
  * Numbers must not move as they tick:
@@ -21,7 +21,7 @@
 #include "palette.h"
 #include "status.h"
 
-#define PAGE_COUNT 3
+#define PAGE_COUNT 5
 #define TILES_PER_PAGE 4
 #define TILE_VALUE_MAX (STATUS_OCC_MAX + 1)
 #define TILE_UNIT_MAX 24
@@ -29,8 +29,22 @@
  * well under it in practice; raise it if a reading clips. */
 #define POWER_FULL_SCALE_W 240.0f
 #define FAN_FULL_SCALE_RPM 13500.0f
+/* RoCE and cluster IP, per direction: the ConnectX-7 sits behind two PCIe
+ * Gen5 x4 links (32 GT/s x4 each, about 126 Gb/s raw), and field reports
+ * measure about 200 Gb/s for the whole NIC, not per port. */
+#define NIC_FULL_SCALE_BPS 200e9
+/* The SSD: PCIe Gen5 x4 (15.75 GB/s after 128b/130b coding). The drive's
+ * rated speed is not published for its part number; 14 GB/s is the class
+ * of Gen5 x4 drives. */
+#define SSD_FULL_SCALE_BYTES_S 14e9
 
-typedef enum { PAGE_GPU = 0, PAGE_COOLING, PAGE_HOST } page_id_t;
+typedef enum {
+    PAGE_GPU = 0,
+    PAGE_COOLING,
+    PAGE_HOST,
+    PAGE_NETWORK,
+    PAGE_STORAGE,
+} page_id_t;
 
 /* Font tiers. Each holds a fixed number of monospace characters. */
 typedef enum {
@@ -89,3 +103,14 @@ char *fmt_krpm(char *buf, size_t cap, float rpm);
 /* Uptime as its largest whole unit: value "14", unit "days"; "5" "hours";
  * "42" "min". At most 3 characters. */
 void fmt_uptime_tile(double up_s, char *value, size_t vcap, char *unit, size_t ucap);
+
+/* Rates, integer math, at most 4 characters, so the digits keep their
+ * columns: "940", "1.2", "18.4", "196". The unit steps when the value
+ * reaches 1000: kb/s, Mb/s, Gb/s for bits; MB/s, GB/s for bytes. Zero is
+ * "0"; unknown is a dash with no unit; past the last unit, ">999". */
+void fmt_bits_rate(double bps, char *value, size_t vcap, char *unit, size_t ucap);
+void fmt_bytes_rate(double bytes_s, char *value, size_t vcap, char *unit, size_t ucap);
+/* Decimal TB from GB, at most 4 characters: 3340 -> "3.34", 12500 ->
+ * "12.5", 128000 -> "128"; ">999" past that. `max_decimals` caps the
+ * places (the size in the unit slot uses 1: "4.0"). */
+char *fmt_tb(char *buf, size_t cap, double gb, int max_decimals);

@@ -130,8 +130,9 @@ FONTS: tuple[FontSpec, ...] = (
     # Barlow: the words around the values.
     FontSpec("brl_24", 24, ranges=("0x20-0x7E", DEGREE, EM_DASH), font=BARLOW_FILE),
     FontSpec("brl_30", 30, ranges=("0x20-0x7E", DEGREE, EM_DASH), font=BARLOW_FILE),
-    # Page titles only.
-    FontSpec("brl_32", 32, symbols="GPUCoolingHstAl temprau", font=BARLOW_FILE),
+    # Page titles only: GPU, Cooling, Host, All temperatures, Network,
+    # Storage, LLM.
+    FontSpec("brl_32", 32, symbols="GPUCoolingHstAl temprauNwkSLM", font=BARLOW_FILE),
     # The NO DATA headline only.
     FontSpec("brl_44", 44, symbols="No data from the DGX", font=BARLOW_FILE),
 )

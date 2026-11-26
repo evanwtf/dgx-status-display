@@ -1,6 +1,7 @@
 #include "tiles.h"
 
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -45,6 +46,8 @@ const char *page_name(page_id_t p)
     case PAGE_GPU: return "GPU";
     case PAGE_COOLING: return "Cooling";
     case PAGE_HOST: return "Host";
+    case PAGE_NETWORK: return "Network";
+    case PAGE_STORAGE: return "Storage";
     }
     return "?";
 }
@@ -138,6 +141,79 @@ void fmt_uptime_tile(double up_s, char *value, size_t vcap, char *unit, size_t u
     snprintf(unit, ucap, "%s", u);
 }
 
+/*
+ * One rate formatter for both families. divs[i] is the size of units[i] in
+ * the base unit (bit/s or byte/s). Rounding is half up, in integers, and is
+ * done before the unit is chosen, so 999.96 kb/s shows "1.0" Mb/s, never
+ * "1000" kb/s.
+ */
+static void fmt_rate(double v, const uint64_t *divs, const char *const *units, int n,
+                     char *value, size_t vcap, char *unit, size_t ucap)
+{
+    if (!isfinite(v) || v < 0) {
+        snprintf(value, vcap, "%s", FMT_DASH);
+        snprintf(unit, ucap, "%s", "");
+        return;
+    }
+    const uint64_t x = (uint64_t)llround(v);
+    if (x == 0) {
+        snprintf(value, vcap, "0");
+        snprintf(unit, ucap, "%s", units[0]);
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        const uint64_t d = divs[i];
+        const uint64_t tenths = (x * 10 + d / 2) / d;
+        snprintf(unit, ucap, "%s", units[i]);
+        if (tenths < 1000) { /* 0.0 .. 99.9 */
+            snprintf(value, vcap, "%u.%u", (unsigned)(tenths / 10), (unsigned)(tenths % 10));
+            return;
+        }
+        const uint64_t whole = (x + d / 2) / d;
+        if (whole < 1000) { /* 100 .. 999 */
+            snprintf(value, vcap, "%u", (unsigned)whole);
+            return;
+        }
+    }
+    snprintf(value, vcap, ">999");
+}
+
+void fmt_bits_rate(double bps, char *value, size_t vcap, char *unit, size_t ucap)
+{
+    static const uint64_t DIVS[] = {1000ULL, 1000000ULL, 1000000000ULL};
+    static const char *const UNITS[] = {"kb/s", "Mb/s", "Gb/s"};
+    fmt_rate(bps, DIVS, UNITS, 3, value, vcap, unit, ucap);
+}
+
+void fmt_bytes_rate(double bytes_s, char *value, size_t vcap, char *unit, size_t ucap)
+{
+    static const uint64_t DIVS[] = {1000000ULL, 1000000000ULL};
+    static const char *const UNITS[] = {"MB/s", "GB/s"};
+    fmt_rate(bytes_s, DIVS, UNITS, 2, value, vcap, unit, ucap);
+}
+
+char *fmt_tb(char *buf, size_t cap, double gb, int max_decimals)
+{
+    if (!isfinite(gb) || gb < 0) {
+        snprintf(buf, cap, "%s", FMT_DASH);
+        return buf;
+    }
+    const uint64_t g = (uint64_t)llround(gb);
+    const uint64_t hundredths = (g + 5) / 10; /* 1 TB = 1000 GB */
+    const uint64_t tenths = (g + 50) / 100;
+    const uint64_t whole = (g + 500) / 1000;
+    if (max_decimals >= 2 && hundredths < 1000) {
+        snprintf(buf, cap, "%u.%02u", (unsigned)(hundredths / 100), (unsigned)(hundredths % 100));
+    } else if (max_decimals >= 1 && tenths < 1000) {
+        snprintf(buf, cap, "%u.%u", (unsigned)(tenths / 10), (unsigned)(tenths % 10));
+    } else if (whole < 1000) {
+        snprintf(buf, cap, "%u", (unsigned)whole);
+    } else {
+        snprintf(buf, cap, ">999");
+    }
+    return buf;
+}
+
 /* v / full_scale clamped to 0..1; -1 (no fill) when either is unknown. */
 static float level(float v, float full_scale)
 {
@@ -146,6 +222,15 @@ static float level(float v, float full_scale)
     }
     float f = v / full_scale;
     return f < 0 ? 0.0f : (f > 1 ? 1.0f : f);
+}
+
+static float level_d(double v, double full_scale)
+{
+    if (!isfinite(v) || !isfinite(full_scale) || full_scale <= 0) {
+        return -1.0f;
+    }
+    double f = v / full_scale;
+    return (float)(f < 0 ? 0.0 : (f > 1 ? 1.0 : f));
 }
 
 static hue_t tone_hue(tone_t t)
@@ -169,6 +254,25 @@ static void num(tile_t *t, const char *label, float v, int decimals, tier_t tier
     t->hue = m == METRIC_NONE ? HUE_MOSS : tone_hue(t->tone);
     t->fill = -1.0f;
     t->hist = HIST_NONE;
+    t->is_text = false;
+}
+
+/* A rate tile: bits (network) or bytes (storage), a level against a full
+ * scale, and a history chart. */
+static void rate_tile(tile_t *t, const char *label, double v, bool bits, hue_t hue,
+                      double full_scale, hist_metric_t hist)
+{
+    t->label = label;
+    if (bits) {
+        fmt_bits_rate(v, t->value, sizeof(t->value), t->unit, sizeof(t->unit));
+    } else {
+        fmt_bytes_rate(v, t->value, sizeof(t->value), t->unit, sizeof(t->unit));
+    }
+    t->tier = TIER_L;
+    t->tone = TONE_NEUTRAL;
+    t->hue = hue;
+    t->fill = level_d(v, full_scale);
+    t->hist = hist;
     t->is_text = false;
 }
 
@@ -266,6 +370,37 @@ void page_tiles(page_id_t p, const status_frame_t *f, tile_t out[TILES_PER_PAGE]
         out[3].hist = HIST_NONE;
         fmt_uptime_tile(f->up_s, out[3].value, sizeof(out[3].value), out[3].unit,
                         sizeof(out[3].unit));
+        break;
+    }
+    case PAGE_NETWORK: {
+        const double link = isfinite(f->lan_mbps) ? f->lan_mbps * 1e6 : NAN;
+        rate_tile(&out[0], "LAN in", f->lan_rx_bps, true, HUE_NET, link, HIST_LAN_RX);
+        rate_tile(&out[1], "LAN out", f->lan_tx_bps, true, HUE_NET, link, HIST_LAN_TX);
+        rate_tile(&out[2], "RoCE in", f->roce_rx_bps, true, HUE_NET, NIC_FULL_SCALE_BPS,
+                  HIST_ROCE_RX);
+        rate_tile(&out[3], "RoCE out", f->roce_tx_bps, true, HUE_NET, NIC_FULL_SCALE_BPS,
+                  HIST_ROCE_TX);
+        break;
+    }
+    case PAGE_STORAGE: {
+        rate_tile(&out[0], "SSD read", f->ssd_rd_bytes_s, false, HUE_STORE,
+                  SSD_FULL_SCALE_BYTES_S, HIST_SSD_RD);
+        rate_tile(&out[1], "SSD write", f->ssd_wr_bytes_s, false, HUE_STORE,
+                  SSD_FULL_SCALE_BYTES_S, HIST_SSD_WR);
+        /* Used in TB, the size in the unit slot: the same pattern as Memory.
+         * The fill already shows the fraction, so a % would say it twice. */
+        tile_t *d = &out[2];
+        d->label = "Disk used";
+        fmt_tb(d->value, sizeof(d->value), f->disk_used_gb, 2);
+        char size[16];
+        fmt_tb(size, sizeof(size), f->disk_size_gb, 1);
+        snprintf(d->unit, sizeof(d->unit), "/ %s TB", size);
+        d->tier = TIER_L;
+        d->hue = HUE_STORE;
+        d->fill = level_d(f->disk_used_gb, f->disk_size_gb);
+        d->hist = HIST_NONE; /* it moves too slowly for a 2-minute chart */
+        rate_tile(&out[3], "Cluster IP", f->cip_bps, true, HUE_NET, NIC_FULL_SCALE_BPS,
+                  HIST_CIP);
         break;
     }
     }

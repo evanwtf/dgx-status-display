@@ -54,7 +54,7 @@ static bool preview_heights(hist_metric_t m, const status_frame_t *f, int height
 #define HALF (W / 2)
 #define SEP 8
 #define SHEET_COLS 4
-#define SHEET_MAX 24
+#define SHEET_MAX 32
 #define SHEET_W (SHEET_COLS * HALF + (SHEET_COLS - 1) * SEP)
 static uint8_t s_sheet[SHEET_W * ((SHEET_MAX / SHEET_COLS) * (HALF + SEP)) * 3];
 static int s_sheet_n;
@@ -67,11 +67,15 @@ static uint8_t s_readme[README_W * README_W * 3];
 static const char *REAL =
     "{\"v\":1,\"t\":1795664697,\"tz_s\":-18000,\"host\":\"test-host\",\"up_s\":1214815,"
     "\"load1\":0.35,\"load5\":0.48,\"load15\":0.36,\"cpu_pct\":0.3,"
-    "\"mem_used_gib\":7.2,\"mem_total_gib\":121.7,\"gpu_pct\":0,\"gpu_w\":4,"
+    "\"mem_used_gib\":7.2,\"mem_total_gib\":127.9,\"gpu_pct\":0,\"gpu_w\":4,"
     "\"gpu_c\":44,\"occ\":\"idle\",\"fan0_rpm\":2790,\"fan1_rpm\":4185,"
     "\"board_c\":45.8,\"nvme_c\":44.9,\"nic_c\":47.0,"
     "\"th\":[[\"tz0\",45.8],[\"tz1\",43.9],[\"nvme\",44.9],[\"nic0\",47.0],"
-    "[\"wifi\",42.0]]}";
+    "[\"wifi\",42.0]],"
+    /* From a 2026-11-26 dry run on the same machine. */
+    "\"lan_rx_bps\":127199,\"lan_tx_bps\":471094,\"lan_mbps\":2500,"
+    "\"roce_rx_bps\":0,\"roce_tx_bps\":0,\"cip_bps\":0,\"ssd_rd_Bps\":74401,"
+    "\"ssd_wr_Bps\":264537,\"disk_used_gb\":3339,\"disk_size_gb\":4032}";
 
 static uint32_t tick_cb(void)
 {
@@ -377,6 +381,13 @@ int main(int argc, char **argv)
     busy.cpu_pct = 63;
     busy.mem_used_gib = 101.4f;
     busy.load1 = 12.48f;
+    busy.lan_rx_bps = 2.3e9;
+    busy.lan_tx_bps = 184e6;
+    busy.roce_rx_bps = 180e9;
+    busy.roce_tx_bps = 176.4e9;
+    busy.cip_bps = 18.4e6;
+    busy.ssd_rd_bytes_s = 6e9;
+    busy.ssd_wr_bytes_s = 940e6;
     show(dir, "04-busy-gpu", &busy, LINK_LIVE, 0, on_page(PAGE_GPU));
     add_to_readme(0);
     show(dir, "05-busy-cooling", &busy, LINK_LIVE, 0, on_page(PAGE_COOLING));
@@ -405,6 +416,20 @@ int main(int argc, char **argv)
     show(dir, "12-no-data-boot", &missing, LINK_NO_DATA, -1, nodata);
     carousel_t detail = {.page = PAGE_GPU, .detail = true};
     show(dir, "13-detail", &real, LINK_LIVE, 0, detail);
+
+    /* Network and storage: idle (the real frame), busy, and missing
+     * counters (the first frame after a restart, or a counter reset). */
+    show(dir, "22-network-idle", &real, LINK_LIVE, 0, on_page(PAGE_NETWORK));
+    show(dir, "23-storage-idle", &real, LINK_LIVE, 0, on_page(PAGE_STORAGE));
+    show(dir, "24-network-busy", &busy, LINK_LIVE, 0, on_page(PAGE_NETWORK));
+    show(dir, "25-storage-busy", &busy, LINK_LIVE, 0, on_page(PAGE_STORAGE));
+    status_frame_t gone = busy;
+    gone.roce_rx_bps = NAN;
+    gone.roce_tx_bps = NAN;
+    gone.ssd_wr_bytes_s = NAN;
+    gone.lan_mbps = NAN;
+    show(dir, "26-network-missing", &gone, LINK_LIVE, 0, on_page(PAGE_NETWORK));
+    show(dir, "27-storage-missing", &gone, LINK_LIVE, 0, on_page(PAGE_STORAGE));
 
     /* The 2-minute history style, on the busy frame (and the hot one). */
     synthetic_history(&busy);
@@ -486,6 +511,15 @@ int main(int argc, char **argv)
     check_column("memory", PAGE_HOST, 1, &f, &f.mem_used_gib, 7.2f, 121.9f);
     check_column("load", PAGE_HOST, 2, &f, &f.load1, 0.35f, 12.34f);
 
+    /* Same LV_MEM_SIZE as the firmware, after every page and the detail
+     * page have been drawn. The host is 64-bit, so its pointers and LVGL
+     * objects are larger: the board's own figure (the minute log line) is
+     * lower. Compare runs of the preview, not the preview with the board. */
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    printf("lv heap: %u%% used, %lu of %lu B free, largest %lu B\n", (unsigned)mon.used_pct,
+           (unsigned long)mon.free_size, (unsigned long)mon.total_size,
+           (unsigned long)mon.free_biggest_size);
     if (s_bad_windows > 0) {
         fprintf(stderr, "FAIL %d flushed windows break the CO5300 rule\n", s_bad_windows);
         s_failed++;

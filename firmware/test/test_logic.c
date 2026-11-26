@@ -597,12 +597,12 @@ static void test_carousel(void)
     carousel_tick(&c, LINK_LIVE, t1 + 4000 + CAROUSEL_PAGE_MS - 1);
     CHECK(c.page == PAGE_HOST);
     carousel_tick(&c, LINK_LIVE, t1 + 4000 + CAROUSEL_PAGE_MS);
-    CHECK(c.page == PAGE_GPU); /* wraps */
+    CHECK(c.page == PAGE_NETWORK);
     int64_t t2 = t1 + 4000 + CAROUSEL_PAGE_MS;
 
     /* STALE keeps cycling. */
     carousel_tick(&c, LINK_STALE, t2 + CAROUSEL_PAGE_MS);
-    CHECK(c.page == PAGE_COOLING);
+    CHECK(c.page == PAGE_STORAGE);
     int64_t t3 = t2 + CAROUSEL_PAGE_MS;
 
     /* Long press opens detail; the carousel holds still under it. */
@@ -610,20 +610,20 @@ static void test_carousel(void)
     CHECK(carousel_view(&c) == VIEW_DETAIL);
     carousel_tick(&c, LINK_LIVE, t3 + 1000 + CAROUSEL_DETAIL_MS - 1);
     CHECK(carousel_view(&c) == VIEW_DETAIL);
-    CHECK(c.page == PAGE_COOLING);
+    CHECK(c.page == PAGE_STORAGE);
     /* The timeout returns to the same page, with a fresh timer. */
     int64_t t4 = t3 + 1000 + CAROUSEL_DETAIL_MS;
     carousel_tick(&c, LINK_LIVE, t4);
     CHECK(carousel_view(&c) == VIEW_PAGE);
-    CHECK(c.page == PAGE_COOLING);
+    CHECK(c.page == PAGE_STORAGE);
     carousel_tick(&c, LINK_LIVE, t4 + CAROUSEL_PAGE_MS - 1);
-    CHECK(c.page == PAGE_COOLING);
+    CHECK(c.page == PAGE_STORAGE);
 
     /* A tap closes detail without moving on. */
     carousel_long_press(&c, t4 + 100);
     carousel_tap(&c, t4 + 200);
     CHECK(carousel_view(&c) == VIEW_PAGE);
-    CHECK(c.page == PAGE_COOLING);
+    CHECK(c.page == PAGE_STORAGE);
 
     /* NO DATA stops cycling, closes detail and ignores touch. */
     carousel_long_press(&c, t4 + 300);
@@ -633,16 +633,16 @@ static void test_carousel(void)
     carousel_long_press(&c, t4 + 600);
     carousel_tick(&c, LINK_NO_DATA, t4 + 10 * CAROUSEL_PAGE_MS);
     CHECK(carousel_view(&c) == VIEW_NO_DATA);
-    CHECK(c.page == PAGE_COOLING);
+    CHECK(c.page == PAGE_STORAGE);
     /* Frames resume: same page, fresh timer. */
     int64_t t5 = t4 + 11 * CAROUSEL_PAGE_MS;
     carousel_tick(&c, LINK_LIVE, t5);
     CHECK(carousel_view(&c) == VIEW_PAGE);
-    CHECK(c.page == PAGE_COOLING);
+    CHECK(c.page == PAGE_STORAGE);
     carousel_tick(&c, LINK_LIVE, t5 + CAROUSEL_PAGE_MS - 1);
-    CHECK(c.page == PAGE_COOLING);
+    CHECK(c.page == PAGE_STORAGE);
     carousel_tick(&c, LINK_LIVE, t5 + CAROUSEL_PAGE_MS);
-    CHECK(c.page == PAGE_HOST);
+    CHECK(c.page == PAGE_GPU); /* wraps after the fifth page */
 }
 
 static void test_report_hello(void)
@@ -767,8 +767,8 @@ static void check_pair(const char *what, uint32_t fg, uint32_t bg, double min, b
 
 static void test_contrast(void)
 {
-    static const char *const names[HUE_COUNT] = {"teal",   "indigo", "violet", "moss",
-                                                 "cool",   "warm",   "hot"};
+    static const char *const names[HUE_COUNT] = {"teal", "indigo", "violet", "moss", "cool",
+                                                 "warm", "hot",    "net",    "store"};
     for (int h = 0; h < HUE_COUNT; h++) {
         const hue_colors_t *c = hue_colors((hue_t)h);
         /* A value or a label can sit over the base, the fill or the line. */
@@ -843,6 +843,199 @@ static void test_moss_stands_apart(void)
     }
 }
 
+/* Network (rose) and storage (green) must read as their own families. Green
+ * sits in the 81 deg between moss and teal, so its floor is 39.5 deg. */
+static void test_families_stand_apart(void)
+{
+    const hue_t fam[2] = {HUE_NET, HUE_STORE};
+    for (int k = 0; k < 2; k++) {
+        const hue_colors_t *m = hue_colors(fam[k]);
+        double worst = 360;
+        for (int h = 0; h < HUE_COUNT; h++) {
+            if (h == (int)fam[k]) {
+                continue;
+            }
+            const hue_colors_t *o = hue_colors((hue_t)h);
+            worst = fmin(worst, hue_gap(m->base, o->base));
+            worst = fmin(worst, hue_gap(m->fill, o->fill));
+            worst = fmin(worst, hue_gap(m->line, o->line));
+        }
+        CHECK(worst >= 39.5);
+    }
+    /* The two families are far apart from each other. */
+    CHECK(hue_gap(hue_colors(HUE_NET)->base, hue_colors(HUE_STORE)->base) > 150);
+}
+
+typedef struct {
+    double v;
+    const char *value;
+    const char *unit;
+} rate_case_t;
+
+static void check_rates(bool bits, const rate_case_t *cases, int n)
+{
+    for (int i = 0; i < n; i++) {
+        char v[16], u[16];
+        if (bits) {
+            fmt_bits_rate(cases[i].v, v, sizeof(v), u, sizeof(u));
+        } else {
+            fmt_bytes_rate(cases[i].v, v, sizeof(v), u, sizeof(u));
+        }
+        CHECK_STR(v, cases[i].value);
+        CHECK_STR(u, cases[i].unit);
+        CHECK(strlen(v) <= 4);
+    }
+}
+
+static void test_fmt_rates(void)
+{
+    static const rate_case_t BITS[] = {
+        {NAN, FMT_DASH, ""},
+        {-1, FMT_DASH, ""},
+        {0, "0", "kb/s"},
+        {40, "0.0", "kb/s"},
+        {50, "0.1", "kb/s"},
+        {9949, "9.9", "kb/s"},
+        {9950, "10.0", "kb/s"},     /* 9.95 rounds up into the next width */
+        {99949, "99.9", "kb/s"},
+        {99950, "100", "kb/s"},
+        {940000, "940", "kb/s"},
+        {999499, "999", "kb/s"},
+        {999500, "1.0", "Mb/s"},     /* never "1000 kb/s" */
+        {1234567, "1.2", "Mb/s"},
+        {18400000, "18.4", "Mb/s"},
+        {99950000, "100", "Mb/s"},
+        {999500000, "1.0", "Gb/s"},
+        {2.3e9, "2.3", "Gb/s"},
+        {18.4e9, "18.4", "Gb/s"},
+        {180e9, "180", "Gb/s"},
+        {196e9, "196", "Gb/s"},
+        {999.4e9, "999", "Gb/s"},
+        {999.5e9, ">999", "Gb/s"},
+        {1e13, ">999", "Gb/s"},
+    };
+    check_rates(true, BITS, (int)(sizeof(BITS) / sizeof(BITS[0])));
+    static const rate_case_t BYTES[] = {
+        {NAN, FMT_DASH, ""},
+        {0, "0", "MB/s"},
+        {8199, "0.0", "MB/s"},
+        {264537, "0.3", "MB/s"},
+        {115194000, "115", "MB/s"},
+        {999499999, "999", "MB/s"},
+        {999500000, "1.0", "GB/s"},
+        {6e9, "6.0", "GB/s"},
+        {14e9, "14.0", "GB/s"},
+        {999.5e12, ">999", "GB/s"},
+    };
+    check_rates(false, BYTES, (int)(sizeof(BYTES) / sizeof(BYTES[0])));
+
+    char b[16];
+    CHECK_STR(fmt_tb(b, sizeof(b), 3340, 2), "3.34");
+    CHECK_STR(fmt_tb(b, sizeof(b), 3339, 2), "3.34");
+    CHECK_STR(fmt_tb(b, sizeof(b), 4, 2), "0.00");
+    CHECK_STR(fmt_tb(b, sizeof(b), 9994, 2), "9.99");
+    CHECK_STR(fmt_tb(b, sizeof(b), 9995, 2), "10.0");
+    CHECK_STR(fmt_tb(b, sizeof(b), 99949, 2), "99.9");
+    CHECK_STR(fmt_tb(b, sizeof(b), 99950, 2), "100");
+    CHECK_STR(fmt_tb(b, sizeof(b), 999499, 2), "999");
+    CHECK_STR(fmt_tb(b, sizeof(b), 999500, 2), ">999");
+    CHECK_STR(fmt_tb(b, sizeof(b), 4032, 1), "4.0");
+    CHECK_STR(fmt_tb(b, sizeof(b), 128000, 1), "128");
+    CHECK_STR(fmt_tb(b, sizeof(b), NAN, 1), FMT_DASH);
+}
+
+static void test_network_and_storage_pages(void)
+{
+    status_frame_t f;
+    status_frame_clear(&f);
+    f.lan_rx_bps = 2.3e9;
+    f.lan_tx_bps = 471094;
+    f.lan_mbps = 2500;
+    f.roce_rx_bps = 180e9;
+    f.roce_tx_bps = 0;
+    f.cip_bps = 3680;
+    f.ssd_rd_bytes_s = 6e9;
+    f.ssd_wr_bytes_s = 264537;
+    f.disk_used_gb = 3340;
+    f.disk_size_gb = 4032;
+    tile_t t[TILES_PER_PAGE];
+    page_tiles(PAGE_NETWORK, &f, t);
+    CHECK_STR(page_name(PAGE_NETWORK), "Network");
+    CHECK_STR(t[0].label, "LAN in");
+    CHECK_STR(t[0].value, "2.3");
+    CHECK_STR(t[0].unit, "Gb/s");
+    CHECK_NEAR(t[0].fill, 0.92f);
+    CHECK(t[0].hue == HUE_NET && t[0].tier == TIER_L && t[0].hist == HIST_LAN_RX);
+    CHECK_STR(t[1].value, "471");
+    CHECK_STR(t[1].unit, "kb/s");
+    CHECK_STR(t[2].label, "RoCE in");
+    CHECK_STR(t[2].value, "180");
+    CHECK_NEAR(t[2].fill, 0.9f);
+    CHECK_STR(t[3].value, "0");
+    CHECK_NEAR(t[3].fill, 0.0f);
+    CHECK(t[3].hist == HIST_ROCE_TX);
+
+    page_tiles(PAGE_STORAGE, &f, t);
+    CHECK_STR(page_name(PAGE_STORAGE), "Storage");
+    CHECK_STR(t[0].label, "SSD read");
+    CHECK_STR(t[0].value, "6.0");
+    CHECK_STR(t[0].unit, "GB/s");
+    CHECK_NEAR(t[0].fill, 6.0f / 14.0f);
+    CHECK(t[0].hue == HUE_STORE);
+    CHECK_STR(t[2].label, "Disk used");
+    CHECK_STR(t[2].value, "3.34");
+    CHECK_STR(t[2].unit, "/ 4.0 TB");
+    CHECK_NEAR(t[2].fill, 3340.0f / 4032.0f);
+    CHECK(t[2].hist == HIST_NONE);
+    CHECK_STR(t[3].label, "Cluster IP");
+    CHECK_STR(t[3].value, "3.7");
+    CHECK_STR(t[3].unit, "kb/s");
+    CHECK(t[3].hue == HUE_NET);
+
+    /* A missing counter: a dash, no unit, no fill. No link speed: no LAN
+     * fill, but the value still shows. */
+    f.roce_rx_bps = NAN;
+    f.lan_mbps = NAN;
+    f.disk_used_gb = f.disk_size_gb = NAN;
+    page_tiles(PAGE_NETWORK, &f, t);
+    CHECK_STR(t[2].value, FMT_DASH);
+    CHECK_STR(t[2].unit, "");
+    CHECK(t[2].fill < 0);
+    CHECK_STR(t[0].value, "2.3");
+    CHECK(t[0].fill < 0);
+    page_tiles(PAGE_STORAGE, &f, t);
+    CHECK_STR(t[2].value, FMT_DASH);
+    CHECK_STR(t[2].unit, "/ " FMT_DASH " TB");
+    CHECK(t[2].fill < 0);
+}
+
+static void test_history_rates(void)
+{
+    static history_t h;
+    hist_init(&h);
+    status_frame_t f;
+    status_frame_clear(&f);
+    f.lan_mbps = 2500;
+    f.lan_rx_bps = 1.25e9;   /* half the link */
+    f.roce_tx_bps = 180e9;   /* 90 % of 200 Gb/s */
+    f.ssd_rd_bytes_s = 7e9;  /* half of 14 GB/s */
+    f.cip_bps = 500e9;       /* over the scale: clamps */
+    hist_push_frame(&h, &f, 0);
+    CHECK(hist_at(&h, HIST_LAN_RX, 0) == 1250);   /* Mb/s */
+    CHECK(hist_at(&h, HIST_ROCE_TX, 0) == 18000); /* hundredths of Gb/s */
+    CHECK(hist_at(&h, HIST_SSD_RD, 0) == 7000);   /* MB/s */
+    CHECK(hist_at(&h, HIST_CIP, 0) == 32767);
+    CHECK(hist_at(&h, HIST_ROCE_RX, 0) == HIST_GAP);
+    int16_t out[HIST_LEN];
+    CHECK(hist_heights(&h, HIST_LAN_RX, &f, 200, out) && out[HIST_LEN - 1] == 100);
+    CHECK(hist_heights(&h, HIST_ROCE_TX, &f, 200, out) && out[HIST_LEN - 1] == 180);
+    CHECK(hist_heights(&h, HIST_SSD_RD, &f, 200, out) && out[HIST_LEN - 1] == 100);
+    CHECK(hist_heights(&h, HIST_CIP, &f, 200, out) && out[HIST_LEN - 1] == 200);
+    /* The LAN scale is the link speed: unknown speed, no chart. */
+    f.lan_mbps = NAN;
+    CHECK(!hist_heights(&h, HIST_LAN_RX, &f, 200, out) && out[HIST_LEN - 1] == -1);
+}
+
 static void test_history_ring(void)
 {
     static history_t h;
@@ -880,7 +1073,7 @@ static void test_history_ring(void)
     for (int i = 0; i < HIST_LEN - 1; i++) {
         CHECK(hist_at(&h, HIST_GPU_PCT, i) == HIST_GAP);
     }
-    CHECK(sizeof(h.s) == 2160);
+    CHECK(sizeof(h.s) == 3840); /* 16 metrics x 120 x int16 */
 }
 
 static void test_history_heights(void)
@@ -1232,6 +1425,10 @@ int main(void)
     test_tile_colors_and_levels();
     test_contrast();
     test_moss_stands_apart();
+    test_families_stand_apart();
+    test_fmt_rates();
+    test_network_and_storage_pages();
+    test_history_rates();
     test_history_ring();
     test_history_heights();
     test_settings();

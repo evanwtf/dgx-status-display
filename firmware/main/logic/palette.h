@@ -18,6 +18,8 @@ typedef enum {
     HUE_COOL,     /* temperatures: below the amber threshold */
     HUE_WARM,     /* at or above amber */
     HUE_HOT,      /* at or above red */
+    HUE_NET,      /* network: LAN, RoCE, cluster IP; rose, 318 deg */
+    HUE_STORE,    /* storage: SSD and disk; green, 136 deg, between moss and teal */
     HUE_COUNT,
 } hue_t;
 

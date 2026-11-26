@@ -265,7 +265,7 @@ sudo systemctl disable --now dgx-status   # the factory app does not read frames
 
 ## What the screen shows
 
-The panel is about 40 mm across, so every value is big. Three pages of four
+The panel is about 40 mm across, so every value is big. Five pages of four
 colored tiles cycle every 10 seconds. Each tile has a label, one value and a
 unit.
 
@@ -274,6 +274,8 @@ unit.
 | GPU | Usage %, Power W, Temp °C, Running (`idle` or the backend) |
 | Cooling | Fan 1 and Fan 2 in kRPM (2700 RPM shows as `2.7`), Board °C, SSD °C |
 | Host | CPU %, Memory used (`/ 128 GiB`, the memory installed, as the unit), Load avg, Up |
+| Network | LAN in, LAN out (against the link speed), RoCE in, RoCE out (against 200 Gb/s), in kb/s, Mb/s or Gb/s |
+| Storage | SSD read, SSD write (against 14 GB/s), in MB/s or GB/s; Disk used in TB (`/ 4.0 TB` as the unit); Cluster IP (kernel IP traffic on the ConnectX-7, in + out) |
 
 ![The three pages and the NO DATA screen](docs/img/pages.png)
 
@@ -282,11 +284,15 @@ unit.
   fill eases to a new level in 400 ms. Temperature tiles turn from blue to
   amber at the threshold and red above it, with a bright edge on top:
   GPU 80 / 90 °C, board and SSD 70 / 80 °C.
+- **Rates are instant.** Each network and SSD figure is the counter's change
+  over the last second, never an average. A counter that resets, or an
+  interface that comes or goes, shows a dash for one frame. Network tiles
+  are rose, storage tiles green.
 - **Charts (option):** on the detail page (long press), the "Charts" row
   switches between **Level** (the default) and **2-minute history**: the
   tile's background becomes an area chart of its last 120 one-second
   samples, on a fixed scale (0–100 %, 0–240 W, 0–13500 RPM, 0–total GiB,
-  20–100 °C). A missing reading or a NO DATA period is a gap. The numbers
+  20–100 °C, 0–link speed, 0–200 Gb/s, 0–14 GB/s; Disk used has no chart). A missing reading or a NO DATA period is a gap. The numbers
   stay the instantaneous reading. The choice survives a reboot (NVS). The
   history lives on the board and starts empty after a reboot.
 - **Top strip:** the page title, the host clock and a link dot (gold LIVE,

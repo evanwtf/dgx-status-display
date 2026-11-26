@@ -7,6 +7,7 @@ The full byte-for-byte check needs Docker and the network:
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 from gen_fonts import FONTS, NODE_IMAGE, OUT_DIR, FontSpec, docker_argv
@@ -67,3 +68,15 @@ def test_every_font_has_every_requested_glyph(spec: FontSpec) -> None:
         if cp == 0x20:
             continue
         assert f"U+{cp:04X}" in text, f"{spec.name} lacks U+{cp:04X}"
+
+
+def test_title_font_covers_every_page_title() -> None:
+    """brl_32 is a subset: a new page title needs its letters added."""
+    root = Path(__file__).resolve().parent.parent
+    tiles = (root / "firmware/main/logic/tiles.c").read_text()
+    titles = re.findall(r'case PAGE_\w+: return "([^"]+)";', tiles)
+    assert len(titles) >= 5
+    spec = next(f for f in FONTS if f.name == "brl_32")
+    for title in [*titles, "All temperatures"]:
+        missing = set(title) - set(spec.symbols)
+        assert not missing, f"{title!r} needs {sorted(missing)} in brl_32"

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+New firmware needs the daemon from this version. With an older daemon,
+the Network and Storage pages show dashes.
+
+- Network and Storage pages: LAN in/out against the link speed, RoCE in/out
+  and Cluster IP against the ConnectX-7's 200 Gb/s, SSD read/write against
+  14 GB/s, and disk use in TB. Each rate is a counter delta between two
+  frames. Memory's total is now the 128 GiB installed, not MemTotal.
+
 ## 0.0.1 (2026-11-26)
 
 The first release. It is phase 1: a DGX Spark sends its status over USB

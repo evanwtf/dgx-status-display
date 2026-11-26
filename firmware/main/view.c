@@ -303,7 +303,7 @@ static void build_pages(void)
 
     /* Strip, drawn last so no mask can cover it: title left; stale age,
      * clock and link dot right. */
-    s_title = label(s_pages, &brl_32, COLOR_TITLE, MARGIN + TILE_PAD, STRIP_Y + 4, 200,
+    s_title = label(s_pages, &brl_32, COLOR_TITLE, MARGIN + TILE_PAD, STRIP_Y + 6, 200,
                     LV_TEXT_ALIGN_LEFT);
     const int dot = 14;
     const int dot_x = W - MARGIN - TILE_PAD - dot; /* in line with the tile text */

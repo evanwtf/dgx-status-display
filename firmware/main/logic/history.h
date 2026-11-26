@@ -8,8 +8,8 @@
  * The big numbers stay instantaneous readings; the chart only shows past
  * instantaneous samples.
  *
- * Samples are int16 in metric units x HIST_SCALE (see hist_metric_t), so
- * 9 metrics x 120 samples take 2160 bytes.
+ * Samples are int16 in metric units x a per-metric scale (history.c), so
+ * 16 metrics x 120 samples take 3840 bytes.
  */
 #pragma once
 
@@ -35,6 +35,13 @@ typedef enum {
     HIST_NVME_C,
     HIST_CPU_PCT,
     HIST_MEM_GIB,
+    HIST_LAN_RX,
+    HIST_LAN_TX,
+    HIST_ROCE_RX,
+    HIST_ROCE_TX,
+    HIST_CIP,
+    HIST_SSD_RD,
+    HIST_SSD_WR,
     HIST_METRICS,
 } hist_metric_t;
 
@@ -53,7 +60,8 @@ void hist_push_frame(history_t *h, const status_frame_t *f, int64_t now_ms);
 int16_t hist_at(const history_t *h, hist_metric_t m, int i);
 
 /* The fixed scale of metric m, in metric units. Memory runs to the total in
- * the frame; false when there is no scale (unknown total). */
+ * the frame and the LAN to its link speed; false when there is no scale
+ * (unknown total or speed). */
 bool hist_scale(hist_metric_t m, const status_frame_t *f, float *lo, float *hi);
 
 /*
