@@ -131,7 +131,7 @@ these in the same file only when the automatic choice is wrong
 | `DGX_STATUS_CLUSTER_IFACES` | every `mlx5_core` interface |
 | `DGX_STATUS_SSD_DISK` | the disk that holds `DGX_STATUS_DISK_PATH` (`nvme0n1`) |
 | `DGX_STATUS_DISK_PATH` | `/` |
-| `DGX_STATUS_LLM_URL` | `http://127.0.0.1:9109/metrics`, the local LLM metrics exporter; `off` turns the LLM page's data off |
+| `DGX_STATUS_LLM_URL` | `http://127.0.0.1:9109/metrics`, the local LLM metrics exporter; `off` reports no engine up, so the board hides the LLM page |
 
 ```bash
 sed -e "s|@USER@|$USER|g" -e "s|@REPO@|$REPO|g" "$REPO/deploy/dgx-status.service" \

@@ -12,7 +12,7 @@ import logging
 import os
 import socket
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from dgx_status import __version__, logging_setup
@@ -20,7 +20,7 @@ from dgx_status.collector import Collector, Sources
 from dgx_status.daemon import LogSink, Sink, run
 from dgx_status.gpu import NvmlGpu
 from dgx_status.llm import DEFAULT_URL as LLM_DEFAULT_URL
-from dgx_status.llm import LlmPoller
+from dgx_status.llm import LlmPoller, LlmReading
 from dgx_status.serial_link import DEFAULT_DEVICE_GLOB, SerialLink, open_port
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,21 @@ def _names(value: str | None) -> tuple[str, ...] | None:
         return None
     names = tuple(n.strip() for n in value.split(",") if n.strip())
     return names or None
+
+
+def llm_source(env: Mapping[str, str]) -> Callable[[], LlmReading | None]:
+    """Start the LLM exporter poller, or report idle when the URL is `off`.
+
+    `off` sends llm_up 0, so the board hides the LLM page rather than
+    showing dashes for an exporter that is not meant to be there.
+    """
+    url = env.get(ENV_LLM_URL) or LLM_DEFAULT_URL
+    if url.strip().lower() == "off":
+        idle = LlmReading(engines_up=0)
+        return lambda: idle
+    poller = LlmPoller(url)
+    poller.start()
+    return poller.reading
 
 
 def sources_from_env(env: Mapping[str, str]) -> Sources:
@@ -98,11 +113,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         sink = SerialLink(args.device, opener=open_port, clock=time.monotonic)
 
-    llm_url = os.environ.get(ENV_LLM_URL) or LLM_DEFAULT_URL
-    poller: LlmPoller | None = None
-    if llm_url.lower() != "off":
-        poller = LlmPoller(llm_url)
-        poller.start()
+    llm = llm_source(os.environ)
     collector = Collector(
         proc_root=args.proc,
         sys_root=args.sys,
@@ -110,7 +121,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         host=short_hostname(),
         clock=time.time,
         sources=sources_from_env(os.environ),
-        llm=poller.reading if poller is not None else None,
+        llm=llm,
     )
     logger.info(
         "dgx-status %s: %s every %.1f s",
