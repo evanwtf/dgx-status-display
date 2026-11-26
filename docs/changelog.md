@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.2 (2026-11-26)
 
 New firmware needs the daemon from this version. With an older daemon,
 the Network and Storage pages show dashes and the LLM page stays hidden.

@@ -1,6 +1,6 @@
 [project]
 name = "dgx-status"
-version = "0.0.1"
+version = "0.0.2"
 description = "Send DGX Spark status frames over USB serial to an ESP32-C6 AMOLED display."
 readme = "README.md"
 license = "MIT"
