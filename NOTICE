@@ -14,16 +14,26 @@ https://github.com/waveshareteam/ESP32-C6-Touch-AMOLED-2.16 at commit
   02_Example/ESP-IDF-v5.5.3/09_LVGL_V9_Test, 02_Example/Arduino-v3.3.3/
   09_LVGL_V9_Test/user_config.h and 02_Example/XiaoZhi-v2.2.5/main/boards/
   waveshare/esp32-c6-touch-amoled-2.16/config.h.
-- firmware/main/display.c: the CO5300 panel init values (s_init_cmds), the
-  brightness command encoding, the even/odd area rounding and the touch
-  orientation flags. From 02_Example/ESP-IDF-v5.5.3/09_LVGL_V9_Test/
-  components/port_bsp/display_bsp.cpp and components/app_bsp/lvgl_bsp.cpp.
-  The Waveshare repository carries no license file.
-- firmware/main/axp2101.c: the AXP2101 register writes (DCDC1 and ALDO1-4 at
-  3.3 V, the ALDO3 power cycle that resets the panel). From the XiaoZhi board
-  file above. XiaoZhi is MIT licensed, Copyright (c) 2025 Shenzhen Xinzhi
-  Future Technology Co., Ltd. The register addresses match XPowersLib
-  (REG/AXP2101Constants.h), MIT licensed, Copyright (c) 2022 lewis he.
+- firmware/main/display.c: the CO5300 panel init values (s_init_cmds). The
+  same 2.16-inch panel sequence is published under permissive licenses:
+  - Espressif esp-brookesia, CC0-1.0, commit 2bb43d86:
+    https://github.com/espressif/esp-brookesia/blob/2bb43d86b0f5f7fd70b6323eddfd7c0476095c93/hal/brookesia_hal_boards/boards/waveshare/esp32_s3_touch_amoled_2_16/setup_device.c#L19-L37
+  - Waveshare-ESP32-components, Apache-2.0, commit 23a6012d:
+    https://github.com/waveshareteam/Waveshare-ESP32-components/blob/23a6012d5e87d27399cf90fb851cab3689e29159/bsp/esp32_s3_touch_amoled_2_16/esp32_s3_touch_amoled_2_16.c#L53-L71
+  Those target the ESP32-S3 version of the board (MADCTL 0x36 = 0xA0). The
+  C6-specific value, MADCTL 0x36 = 0x30, and the brightness command encoding,
+  the even/odd area rounding and the touch orientation flags come from the
+  Waveshare C6 demo above (02_Example/ESP-IDF-v5.5.3/09_LVGL_V9_Test,
+  components/port_bsp/display_bsp.cpp and components/app_bsp/lvgl_bsp.cpp).
+  That repository carries no license file.
+- firmware/main/axp2101.c: the AXP2101 register values (DCDC1 and ALDO1-4 at
+  3.3 V, the ALDO3 power cycle that resets the panel). From XiaoZhi, MIT
+  licensed, "Copyright (c) 2025 Shenzhen Xinzhi Future Technology Co., Ltd."
+  and "Copyright (c) 2025 Project Contributors", commit a3134949:
+  https://github.com/78/xiaozhi-esp32/blob/a31349491ba9805c5e7b7f7b4dc6f33172cdc655/main/boards/waveshare/esp32-c6-touch-amoled-2.16/esp32-c6-touch-amoled-2.16.cc#L29-L59
+  The same values are in the Waveshare C6 demo's power_bsp.cpp. The register
+  addresses match XPowersLib (REG/AXP2101Constants.h), MIT licensed,
+  Copyright (c) 2022 lewis he.
 
 These are register values and pin numbers, not program logic. All code in
 this repository was written for it.

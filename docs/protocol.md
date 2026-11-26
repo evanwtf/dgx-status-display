@@ -87,6 +87,9 @@ whether or not the host has the port open.
 The firmware accepts a frame only when:
 
 - the line is at most 1024 bytes and is valid JSON with an object at the top;
+- `[`/`{` nesting, counted outside strings, is at most 4 deep (a real frame
+  is 3 deep). The firmware checks this before it parses, so deep input
+  cannot exhaust the parser's stack;
 - `v` is 1, `t` is a number, and `host` is a non-empty string.
 
 It drops a field whose value is the wrong type, not finite, or out of range.

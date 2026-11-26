@@ -51,7 +51,8 @@ export IDF_IMAGE=espressif/idf:v5.5.6@sha256:bf72fe7a15c22849a9a94147301165a545f
 ### 2. Get the code and check the daemon
 
 ```bash
-git clone https://github.com/evanwtf/dgx-status-display "$REPO"
+if [ -d "$REPO/.git" ]; then git -C "$REPO" pull --ff-only; \
+  else git clone https://github.com/evanwtf/dgx-status-display "$REPO"; fi
 cd "$REPO"
 uv sync --frozen
 uv run dgx-status --dry-run --once
@@ -63,27 +64,35 @@ The dry run logs one frame and opens no device. Check it: `occ` matches
 
 ### 3. Back up the factory firmware
 
-Do this once, before the first flash. esptool resets the board into its
-bootloader; the screen goes dark until the next step.
+Do this once, before the first flash. Each esptool command resets the chip
+into its bootloader and, with `--after hard_reset` (the default), resets it
+back into the factory app when it finishes. The factory screen comes back
+after each step.
 
 ```bash
 cd "$REPO"
 mkdir -p backup
-docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" \
-  esptool.py --chip esp32c6 -p "$DEV" flash_id
+alias esptool='docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" esptool.py --chip esp32c6 -p "$DEV"'
+esptool flash_id                      # must report a 16 MB flash
+esptool get_security_info             # secure boot and flash encryption must be off
 docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" \
   bash -c "esptool.py --chip esp32c6 -p $DEV -b 460800 read_flash 0 0x1000000 backup/factory-16MB.bin \
     && chown $(id -u):$(id -g) backup/factory-16MB.bin"
-ls -l backup/factory-16MB.bin       # must be 16777216 bytes
-sha256sum backup/factory-16MB.bin
+ls -l backup/factory-16MB.bin         # must be 16777216 bytes
+esptool -b 460800 verify_flash 0 backup/factory-16MB.bin   # reads the chip again and compares
+(cd backup && sha256sum factory-16MB.bin > factory-16MB.bin.sha256)
 ```
 
-`flash_id` must report a 16 MB flash. Git ignores `backup/`. Copy the file
-off this machine too. Waveshare also publishes its factory image
-(`03_Firmware/01_Fac-v1.0.0.bin` in
-[waveshareteam/ESP32-C6-Touch-AMOLED-2.16](https://github.com/waveshareteam/ESP32-C6-Touch-AMOLED-2.16)).
+Stop if `get_security_info` shows secure boot or flash encryption enabled:
+this firmware is unsigned and the flash would not boot. Git ignores
+`backup/`. Copy `factory-16MB.bin` and its `.sha256` off this machine too.
+Waveshare also publishes its factory image (`03_Firmware/01_Fac-v1.0.0.bin`
+in [waveshareteam/ESP32-C6-Touch-AMOLED-2.16](https://github.com/waveshareteam/ESP32-C6-Touch-AMOLED-2.16)).
 
 ### 4. Build and flash the firmware
+
+The first flash happens before the service exists, so nothing else holds the
+port.
 
 ```bash
 cd "$REPO"
@@ -95,6 +104,12 @@ docker run --rm --device="$DEV" -v "$REPO:/project" -w /project/firmware/build "
 ```
 
 The board restarts and shows "DGX not sending".
+
+**If esptool cannot connect** (for example, the firmware on the chip has
+taken over USB): unplug the board, hold **BOOT**, plug it back in, release
+BOOT. The chip now waits in its bootloader. Run the same command with
+`--before no_reset` in place of `--before default_reset`. Then press the
+reset button or replug.
 
 ### 5. Install the service
 
@@ -124,11 +139,30 @@ The port is `root:dialout 0660`. Pick one:
 - **Manual runs as your user:** `sudo usermod -aG dialout "$USER"`, then log
   out and in. Then `uv run dgx-status` (or `--device "$PORT"` to pin a port).
 
+## Update the firmware
+
+Once the service runs, it holds the port. Stop it for every esptool command,
+and start it again afterwards.
+
+```bash
+cd "$REPO"
+git pull --ff-only
+uv run python scripts/firmware.py build
+sudo systemctl stop dgx-status
+docker run --rm --device="$DEV" -v "$REPO:/project" -w /project/firmware/build "$IDF_IMAGE" \
+  esptool.py --chip esp32c6 -p "$DEV" -b 460800 --before default_reset --after hard_reset \
+  write_flash "@flash_args"
+sudo systemctl start dgx-status
+```
+
 ## Restore the factory firmware
 
 ```bash
+cd "$REPO/backup" && sha256sum -c factory-16MB.bin.sha256 && cd "$REPO"
+sudo systemctl stop dgx-status        # if the service is installed
 docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" \
   esptool.py --chip esp32c6 -p "$DEV" -b 460800 write_flash 0 backup/factory-16MB.bin
+sudo systemctl disable --now dgx-status   # the factory app does not read frames
 ```
 
 ## What the screen shows
@@ -143,7 +177,8 @@ docker run --rm --device="$DEV" -v "$REPO:/project" -w /project "$IDF_IMAGE" \
   age), NO DATA (over 10 s or never: the screen dims and says "DGX not
   sending").
 - **Burn-in care:** black background, gray text, the layout moves a few
-  pixels every 3 minutes, moderate brightness, dimmer in NO DATA.
+  pixels every 3 minutes along a 10-pixel orbit, moderate brightness, a gentle dim after 10 minutes with no change
+  (no tap, no link change, no new GPU occupant), dimmest in NO DATA.
 
 Each value is one instantaneous reading. An unknown value shows `—`.
 

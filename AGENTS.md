@@ -88,6 +88,16 @@ serial number or MAC, or a secret's storage location. Describe a machine by
 its role. `tests/test_public_guard.py` enforces this and reports `file:line`
 only.
 
+## Pull requests from forks
+
+- **Never approve a fork pull request's workflow run.** The jobs run on
+  self-hosted runners; an approved run executes the fork's code on a machine
+  on Evan's desk. The `fork-guard` job fails such a PR on purpose.
+- **Never approve a run for any PR that touches `.github/`**, from a fork or
+  not, without Evan's explicit go-ahead.
+- To test a fork's change, a maintainer reads it, then pushes it to a branch
+  in this repo.
+
 ## Before doing this, read
 
 | Before doing this | Rule | Read |
