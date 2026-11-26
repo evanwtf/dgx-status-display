@@ -20,6 +20,8 @@ void status_frame_clear(status_frame_t *f)
     f->roce_rx_bps = f->roce_tx_bps = f->cip_bps = NAN;
     f->ssd_rd_bytes_s = f->ssd_wr_bytes_s = NAN;
     f->disk_used_gb = f->disk_size_gb = NAN;
+    f->llm_up = f->llm_out_tps = f->llm_in_tps = f->llm_req = NAN;
+    f->llm_kv_pct = f->llm_spec_pct = f->llm_ttft_ms = NAN;
 }
 
 const char *frame_result_name(frame_result_t r)
@@ -203,6 +205,18 @@ frame_result_t frame_parse(const char *line, size_t len, status_frame_t *out)
         out->disk_used_gb > out->disk_size_gb) {
         out->disk_used_gb = NAN;
         out->disk_size_gb = NAN;
+    }
+    out->llm_up = num_in(root, "llm_up", 0, 1000);
+    if (!isnan(out->llm_up) && out->llm_up > 0) {
+        if (!str_into(root, "llm_model", out->llm_model, STATUS_OCC_MAX)) {
+            out->llm_model[0] = '\0';
+        }
+        out->llm_out_tps = num_in(root, "llm_out_tps", 0, 1e7);
+        out->llm_in_tps = num_in(root, "llm_in_tps", 0, 1e7);
+        out->llm_req = num_in(root, "llm_req", 0, 1e6);
+        out->llm_kv_pct = num_in(root, "llm_kv_pct", 0, 100);
+        out->llm_spec_pct = num_in(root, "llm_spec_pct", 0, 100);
+        out->llm_ttft_ms = num_in(root, "llm_ttft_ms", 0, 1e7);
     }
     parse_temps(root, out);
 

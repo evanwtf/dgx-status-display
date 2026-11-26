@@ -54,6 +54,13 @@ cannot read it. It never sends `null`, `NaN` or a placeholder number.
 | `roce_rx_bps`, `roce_tx_bps` | int | bit/s | RoCE traffic: the sum over every `/sys/class/infiniband/*/ports/*` whose `link_layer` is `Ethernet`, of `counters/port_rcv_data` and `port_xmit_data`. Those count 4-byte words, so bits = delta × 32. |
 | `cip_bps` | int | bit/s | IP traffic on the cluster NIC, in + out: `statistics/rx_bytes` + `tx_bytes` × 8 over the interfaces whose driver is `mlx5_core`. It excludes RoCE (below). |
 | `ssd_rd_Bps`, `ssd_wr_Bps` | int | byte/s | `/sys/block/<disk>/stat` sectors read (field 3) and written (field 7) × 512, delta. The disk is the one that holds `/`. (`B` is bytes, `b` is bits.) |
+| `llm_up` | int | — | LLM engines up, from the local LLM metrics exporter (`llme_engine_up` = 1). `0`: no engine up (idle). Left out when the exporter cannot be read: every `llm_*` field is then unknown. |
+| `llm_model` | string | — | The models of the engines that are up, sorted, joined with `, `, at most 48 characters. |
+| `llm_out_tps`, `llm_in_tps` | number | tokens/s | Generated (`llme_tokens_total{phase="decode"}`) and computed prompt tokens (`phase="prefill"`), summed over the engines that are up. See LLM rates below. |
+| `llm_req` | int | — | `llme_requests_running`, summed. |
+| `llm_kv_pct` | number | % | `llme_kv_cache_usage_ratio` × 100, the highest of the engines that are up. Left out when no engine reports it (llama.cpp does not). |
+| `llm_spec_pct` | number | % | Speculative decoding: accepted / draft tokens over the latest step in which drafts moved. |
+| `llm_ttft_ms` | int | ms | Time to first token: `llme_time_to_first_token_seconds` sum / count over the latest step in which the count moved. |
 | `disk_used_gb`, `disk_size_gb` | int | GB (10⁹ B) | `statvfs("/")`: size = `f_blocks × f_frsize`, used = `(f_blocks − f_bfree) × f_frsize`, as `df` counts them. Sent together, or not at all. |
 
 Numbers other than the integers carry one decimal place (`load*`: two).
@@ -71,6 +78,26 @@ window. A rate is left out (unknown) when:
   away).
 
 An environment variable can replace each automatic choice: see the README.
+
+### LLM rates
+
+The daemon polls the exporter about once a second on its own thread, with
+a 300 ms timeout, so a slow exporter never delays a frame. A poll older than
+3 s is not used. The exporter re-reads each engine on every poll, but the
+engines' counters move at different times (the exporter's
+`docs/adapters.md`): vLLM each scheduler step, SGLang on a timer, llama.cpp
+and TensorFold when a request finishes. A 1-second delta of a counter that
+moves every few seconds flips between 0 and a spike. So `llm_out_tps` and
+`llm_in_tps` are the counter delta over one exporter update step: from the
+previous poll at which the counter changed to this one. That is one update,
+not an average across updates. Between changes the last step's rate holds
+while requests are running; with none running it is 0. A step longer than
+30 s, a counter that goes down, or a new or vanished series makes the rate
+unknown for that poll.
+
+`llm_up` is present only when the exporter answered with `llme_engine_up`.
+With `llm_up` 0, no other `llm_*` field is sent. With `llm_up` above 0 and
+no requests, the rates and `llm_req` are real zeros.
 
 **What the counters count** (Linux 7.0, mlx5):
 
@@ -100,7 +127,7 @@ reports N/A on GB10, because the memory pool is unified. `mem_*` covers it.
 
 The daemon truncates `host`, `occ` and the `th` labels. If a frame is still
 over 1024 bytes, it drops `th` entries from the end until the frame fits. The
-overview fields always fit: every one at its longest takes 639 bytes.
+overview fields always fit: every one at its longest takes 843 bytes.
 
 ### Example
 
@@ -179,6 +206,10 @@ That field then shows `—`; the rest of the frame stays. Ranges:
 | rates (`*_bps`, `*_Bps`) | 0 to 10¹³ |
 | `lan_mbps` | 1 to 10⁷ |
 | `disk_*_gb` | 0 to 10⁹, both present, and used ≤ size |
+| `llm_up` | 0 to 1000; the other `llm_*` fields are read only when it is above 0 |
+| `llm_*_tps`, `llm_ttft_ms` | 0 to 10⁷ |
+| `llm_req` | 0 to 10⁶ |
+| `llm_*_pct` | 0 to 100 |
 | `load*` | 0 to 10000 |
 | `up_s` | 0 or more |
 

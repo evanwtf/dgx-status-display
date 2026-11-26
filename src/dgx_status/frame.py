@@ -17,6 +17,8 @@ MAX_LINE_BYTES = 1024
 MAX_HOST_CHARS = 32
 MAX_OCC_CHARS = 48
 MAX_LABEL_CHARS = 15
+MAX_MODEL_CHARS = 48
+MAX_TPS = 10**7
 MAX_TZ_S = 14 * 3600
 # Above any real link or disk (10 Tb/s, 10 TB/s): a larger rate is a bug.
 MAX_RATE = 10**13
@@ -55,6 +57,16 @@ class Snapshot:
     ssd_wr_bytes_s: float | None = None
     disk_used_gb: int | None = None
     disk_size_gb: int | None = None
+    # LLM engines, from the local LLM metrics exporter. llm_up None: the
+    # exporter is unreachable; 0: no engine up (idle).
+    llm_up: int | None = None
+    llm_model: str | None = None
+    llm_out_tps: float | None = None
+    llm_in_tps: float | None = None
+    llm_req: int | None = None
+    llm_kv_pct: float | None = None
+    llm_spec_pct: float | None = None
+    llm_ttft_ms: float | None = None
 
 
 def _num(value: float | None, digits: int) -> float | None:
@@ -73,6 +85,10 @@ def _rate(value: float | None) -> int | None:
     """A rate as a whole number. A negative rate cannot happen; drop it."""
     r = _int(value)
     return r if r is not None and 0 <= r <= MAX_RATE else None
+
+
+def _bounded(value: float | None, hi: float) -> float | None:
+    return value if value is not None and 0 <= value <= hi else None
 
 
 def _fields(s: Snapshot) -> dict[str, Any]:
@@ -113,6 +129,16 @@ def _fields(s: Snapshot) -> dict[str, Any]:
     ):
         f["disk_used_gb"] = int(s.disk_used_gb)
         f["disk_size_gb"] = int(s.disk_size_gb)
+    if s.llm_up is not None and 0 <= s.llm_up <= 1000:
+        f["llm_up"] = int(s.llm_up)
+        if s.llm_model:
+            f["llm_model"] = s.llm_model[:MAX_MODEL_CHARS]
+        f["llm_out_tps"] = _bounded(_num(s.llm_out_tps, 1), MAX_TPS)
+        f["llm_in_tps"] = _bounded(_num(s.llm_in_tps, 1), MAX_TPS)
+        f["llm_req"] = _bounded(_int(s.llm_req), 1_000_000)
+        f["llm_kv_pct"] = _bounded(_num(s.llm_kv_pct, 1), 100)
+        f["llm_spec_pct"] = _bounded(_num(s.llm_spec_pct, 1), 100)
+        f["llm_ttft_ms"] = _bounded(_int(s.llm_ttft_ms), MAX_TPS)
     th = [[label[:MAX_LABEL_CHARS], _num(c, 1)] for label, c in s.temps]
     f["th"] = [x for x in th if x[1] is not None] or None
     return {k: v for k, v in f.items() if v is not None}

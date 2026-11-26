@@ -199,6 +199,14 @@ def _worst() -> Snapshot:
         ssd_wr_bytes_s=big,
         disk_used_gb=999_999_999,
         disk_size_gb=999_999_999,
+        llm_up=1000,
+        llm_model="m" * 500,
+        llm_out_tps=9_999_999.9,
+        llm_in_tps=9_999_999.9,
+        llm_req=1_000_000,
+        llm_kv_pct=100.0,
+        llm_spec_pct=100.0,
+        llm_ttft_ms=9_999_999,
     )
 
 
@@ -211,9 +219,9 @@ def test_worst_case_frame_fits_with_every_overview_field() -> None:
     s.temps = []
     overview = _decode(encode_frame(s))
     assert {k: v for k, v in f.items() if k != "th"} == overview
-    assert len(overview) == 30
-    # Room left for the detail list: at least a few sensors always fit.
-    assert len(encode_frame(s)) < MAX_LINE_BYTES - 200
+    assert len(overview) == 38
+    # Room left for the detail list: about ten short sensors always fit.
+    assert len(encode_frame(s)) < MAX_LINE_BYTES - 150
 
 
 @pytest.mark.parametrize(
@@ -239,3 +247,44 @@ def test_link_speed_must_be_positive() -> None:
     s = _full()
     s.lan_mbps = -1  # /sys/class/net/X/speed reads -1 when the link is down
     assert "lan_mbps" not in _decode(encode_frame(s))
+
+
+def test_llm_idle_sends_only_the_engine_count() -> None:
+    s = _full()
+    s.llm_up = 0
+    f = _decode(encode_frame(s))
+    assert f["llm_up"] == 0
+    assert not [k for k in f if k.startswith("llm_") and k != "llm_up"]
+
+
+def test_llm_unreachable_sends_nothing() -> None:
+    s = _full()
+    s.llm_out_tps = 45.0  # ignored without llm_up
+    assert not [k for k in _decode(encode_frame(s)) if k.startswith("llm_")]
+
+
+def test_llm_fields() -> None:
+    s = _full()
+    s.llm_up = 1
+    s.llm_model = "MiMo-v2.6-Flash"
+    s.llm_out_tps = 45.04
+    s.llm_in_tps = 2000.0
+    s.llm_req = 3
+    s.llm_kv_pct = 62.04
+    s.llm_spec_pct = 66.6
+    s.llm_ttft_ms = 4668.7
+    f = _decode(encode_frame(s))
+    assert {k: v for k, v in f.items() if k.startswith("llm_")} == {
+        "llm_up": 1,
+        "llm_model": "MiMo-v2.6-Flash",
+        "llm_out_tps": 45.0,
+        "llm_in_tps": 2000.0,
+        "llm_req": 3,
+        "llm_kv_pct": 62.0,
+        "llm_spec_pct": 66.6,
+        "llm_ttft_ms": 4669,
+    }
+    s.llm_kv_pct = 100.4  # rounds to 100.4: over 100 is dropped
+    s.llm_out_tps = -1.0
+    f = _decode(encode_frame(s))
+    assert "llm_kv_pct" not in f and "llm_out_tps" not in f

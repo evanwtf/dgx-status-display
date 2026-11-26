@@ -126,6 +126,34 @@ static void test_parse_net_and_storage(void)
     CHECK(isnan(f.disk_used_gb) && isnan(f.disk_size_gb));
 }
 
+static void test_parse_llm(void)
+{
+    status_frame_t f;
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"h\",\"llm_up\":1,"
+                "\"llm_model\":\"MiMo-v2.6-Flash\",\"llm_out_tps\":45.0,"
+                "\"llm_in_tps\":2000.0,\"llm_req\":3,\"llm_kv_pct\":62.0,"
+                "\"llm_spec_pct\":66.6,\"llm_ttft_ms\":4669}",
+                &f) == FRAME_OK);
+    CHECK(f.llm_up == 1);
+    CHECK_STR(f.llm_model, "MiMo-v2.6-Flash");
+    CHECK(f.llm_out_tps == 45.0 && f.llm_in_tps == 2000.0 && f.llm_req == 3);
+    CHECK(f.llm_kv_pct == 62.0 && f.llm_spec_pct == 66.6 && f.llm_ttft_ms == 4669);
+
+    /* Idle: the engine count only; anything else is ignored. */
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"h\",\"llm_up\":0,\"llm_req\":3}",
+                &f) == FRAME_OK);
+    CHECK(f.llm_up == 0 && isnan(f.llm_req) && f.llm_model[0] == '\0');
+    /* Unreachable: no llm_up at all. */
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"h\",\"llm_out_tps\":5}", &f) ==
+          FRAME_OK);
+    CHECK(isnan(f.llm_up) && isnan(f.llm_out_tps));
+    /* Out of range: that field only. */
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"h\",\"llm_up\":1,\"llm_kv_pct\":101,"
+                "\"llm_req\":-1,\"llm_out_tps\":0}",
+                &f) == FRAME_OK);
+    CHECK(isnan(f.llm_kv_pct) && isnan(f.llm_req) && f.llm_out_tps == 0);
+}
+
 static void test_parse_minimal_frame_is_all_unknown(void)
 {
     status_frame_t f;
@@ -1404,6 +1432,7 @@ int main(void)
     test_parse_real_frame();
     test_parse_minimal_frame_is_all_unknown();
     test_parse_net_and_storage();
+    test_parse_llm();
     test_parse_rejects();
     test_parse_bad_optional_fields_become_unknown();
     test_parse_size_cap();

@@ -53,6 +53,13 @@ typedef struct {
     double cip_bps; /* IP traffic on the cluster NIC, in + out */
     double ssd_rd_bytes_s, ssd_wr_bytes_s;
     double disk_used_gb, disk_size_gb; /* decimal GB */
+    /* LLM engines. llm_up NAN: the exporter is unreachable; 0: idle. */
+    double llm_up;
+    char llm_model[STATUS_OCC_MAX + 1]; /* models of the engines that are up */
+    double llm_out_tps, llm_in_tps;     /* tokens/s, over one exporter update */
+    double llm_req;                     /* requests running */
+    double llm_kv_pct, llm_spec_pct;    /* % */
+    double llm_ttft_ms;
     int n_temps;
     status_temp_t temps[STATUS_MAX_TEMPS];
 } status_frame_t;
