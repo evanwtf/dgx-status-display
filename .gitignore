@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+dist/
+.env
+
+# ESP-IDF build output and local config
+firmware/build/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/test/build/
+
+# Factory firmware backups: device-specific binaries. Keep them out of git.
+backup/
+*.bin
