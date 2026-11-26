@@ -16,6 +16,10 @@ void status_frame_clear(status_frame_t *f)
     f->gpu_pct = f->gpu_w = f->gpu_c = NAN;
     f->fan0_rpm = f->fan1_rpm = NAN;
     f->board_c = f->nvme_c = f->nic_c = NAN;
+    f->lan_rx_bps = f->lan_tx_bps = f->lan_mbps = NAN;
+    f->roce_rx_bps = f->roce_tx_bps = f->cip_bps = NAN;
+    f->ssd_rd_bytes_s = f->ssd_wr_bytes_s = NAN;
+    f->disk_used_gb = f->disk_size_gb = NAN;
 }
 
 const char *frame_result_name(frame_result_t r)
@@ -185,6 +189,21 @@ frame_result_t frame_parse(const char *line, size_t len, status_frame_t *out)
     out->board_c = (float)num_in(root, "board_c", TEMP_LO, TEMP_HI);
     out->nvme_c = (float)num_in(root, "nvme_c", TEMP_LO, TEMP_HI);
     out->nic_c = (float)num_in(root, "nic_c", TEMP_LO, TEMP_HI);
+    out->lan_rx_bps = num_in(root, "lan_rx_bps", 0, PROTO_MAX_RATE);
+    out->lan_tx_bps = num_in(root, "lan_tx_bps", 0, PROTO_MAX_RATE);
+    out->lan_mbps = num_in(root, "lan_mbps", 1, PROTO_MAX_LINK_MBPS);
+    out->roce_rx_bps = num_in(root, "roce_rx_bps", 0, PROTO_MAX_RATE);
+    out->roce_tx_bps = num_in(root, "roce_tx_bps", 0, PROTO_MAX_RATE);
+    out->cip_bps = num_in(root, "cip_bps", 0, PROTO_MAX_RATE);
+    out->ssd_rd_bytes_s = num_in(root, "ssd_rd_Bps", 0, PROTO_MAX_RATE);
+    out->ssd_wr_bytes_s = num_in(root, "ssd_wr_Bps", 0, PROTO_MAX_RATE);
+    out->disk_used_gb = num_in(root, "disk_used_gb", 0, PROTO_MAX_DISK_GB);
+    out->disk_size_gb = num_in(root, "disk_size_gb", 0, PROTO_MAX_DISK_GB);
+    if (isnan(out->disk_used_gb) || isnan(out->disk_size_gb) ||
+        out->disk_used_gb > out->disk_size_gb) {
+        out->disk_used_gb = NAN;
+        out->disk_size_gb = NAN;
+    }
     parse_temps(root, out);
 
 done:

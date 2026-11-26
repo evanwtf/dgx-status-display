@@ -18,6 +18,8 @@ MAX_HOST_CHARS = 32
 MAX_OCC_CHARS = 48
 MAX_LABEL_CHARS = 15
 MAX_TZ_S = 14 * 3600
+# Above any real link or disk (10 Tb/s, 10 TB/s): a larger rate is a bug.
+MAX_RATE = 10**13
 
 
 @dataclass
@@ -41,6 +43,18 @@ class Snapshot:
     nvme_c: float | None = None
     nic_c: float | None = None
     temps: list[tuple[str, float]] = field(default_factory=list)
+    # Rates are deltas between two frames: bits/s for networks, bytes/s for
+    # the SSD.
+    lan_rx_bps: float | None = None
+    lan_tx_bps: float | None = None
+    lan_mbps: int | None = None
+    roce_rx_bps: float | None = None
+    roce_tx_bps: float | None = None
+    cip_bps: float | None = None
+    ssd_rd_bytes_s: float | None = None
+    ssd_wr_bytes_s: float | None = None
+    disk_used_gb: int | None = None
+    disk_size_gb: int | None = None
 
 
 def _num(value: float | None, digits: int) -> float | None:
@@ -53,6 +67,12 @@ def _int(value: float | None) -> int | None:
     if value is None or not math.isfinite(value):
         return None
     return round(value)
+
+
+def _rate(value: float | None) -> int | None:
+    """A rate as a whole number. A negative rate cannot happen; drop it."""
+    r = _int(value)
+    return r if r is not None and 0 <= r <= MAX_RATE else None
 
 
 def _fields(s: Snapshot) -> dict[str, Any]:
@@ -78,6 +98,21 @@ def _fields(s: Snapshot) -> dict[str, Any]:
     f["board_c"] = _num(s.board_c, 1)
     f["nvme_c"] = _num(s.nvme_c, 1)
     f["nic_c"] = _num(s.nic_c, 1)
+    f["lan_rx_bps"] = _rate(s.lan_rx_bps)
+    f["lan_tx_bps"] = _rate(s.lan_tx_bps)
+    f["lan_mbps"] = s.lan_mbps if s.lan_mbps is not None and s.lan_mbps > 0 else None
+    f["roce_rx_bps"] = _rate(s.roce_rx_bps)
+    f["roce_tx_bps"] = _rate(s.roce_tx_bps)
+    f["cip_bps"] = _rate(s.cip_bps)
+    f["ssd_rd_Bps"] = _rate(s.ssd_rd_bytes_s)
+    f["ssd_wr_Bps"] = _rate(s.ssd_wr_bytes_s)
+    if (
+        s.disk_used_gb is not None
+        and s.disk_size_gb is not None
+        and 0 <= s.disk_used_gb <= s.disk_size_gb
+    ):
+        f["disk_used_gb"] = int(s.disk_used_gb)
+        f["disk_size_gb"] = int(s.disk_size_gb)
     th = [[label[:MAX_LABEL_CHARS], _num(c, 1)] for label, c in s.temps]
     f["th"] = [x for x in th if x[1] is not None] or None
     return {k: v for k, v in f.items() if v is not None}

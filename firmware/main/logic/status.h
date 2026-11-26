@@ -21,6 +21,10 @@
 /* A real frame nests 3 deep. cJSON recurses once per level (about 96 bytes of
  * stack each), so deep input is refused before cJSON sees it. */
 #define PROTO_MAX_DEPTH 4
+/* Range checks: above any real link or disk. */
+#define PROTO_MAX_RATE 1e13
+#define PROTO_MAX_LINK_MBPS 1e7
+#define PROTO_MAX_DISK_GB 1e9
 
 typedef struct {
     char label[STATUS_LABEL_MAX + 1];
@@ -40,6 +44,15 @@ typedef struct {
     float gpu_pct, gpu_w, gpu_c;
     float fan0_rpm, fan1_rpm;
     float board_c, nvme_c, nic_c;
+    /* Network rates in bit/s, SSD rates in byte/s: deltas between two host
+     * frames. double: a 200 Gb/s rate needs more than float's 24 bits only
+     * for the last digits, but the formatters do integer math on it. */
+    double lan_rx_bps, lan_tx_bps;
+    double lan_mbps; /* LAN link speed, Mb/s */
+    double roce_rx_bps, roce_tx_bps;
+    double cip_bps; /* IP traffic on the cluster NIC, in + out */
+    double ssd_rd_bytes_s, ssd_wr_bytes_s;
+    double disk_used_gb, disk_size_gb; /* decimal GB */
     int n_temps;
     status_temp_t temps[STATUS_MAX_TEMPS];
 } status_frame_t;

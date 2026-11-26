@@ -91,6 +91,41 @@ static void test_parse_real_frame(void)
     CHECK_NEAR(f.temps[4].c, 42.0f);
 }
 
+/* The network and storage fields (docs/protocol.md). */
+static void test_parse_net_and_storage(void)
+{
+    status_frame_t f;
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"h\",\"lan_rx_bps\":32640,"
+                "\"lan_tx_bps\":67401,\"lan_mbps\":2500,"
+                "\"roce_rx_bps\":180000000000,\"roce_tx_bps\":0,\"cip_bps\":3680,"
+                "\"ssd_rd_Bps\":115194000,\"ssd_wr_Bps\":767000,"
+                "\"disk_used_gb\":3340,\"disk_size_gb\":4032}",
+                &f) == FRAME_OK);
+    CHECK(f.lan_rx_bps == 32640 && f.lan_tx_bps == 67401 && f.lan_mbps == 2500);
+    CHECK(f.roce_rx_bps == 180000000000.0 && f.roce_tx_bps == 0);
+    CHECK(f.cip_bps == 3680);
+    CHECK(f.ssd_rd_bytes_s == 115194000 && f.ssd_wr_bytes_s == 767000);
+    CHECK(f.disk_used_gb == 3340 && f.disk_size_gb == 4032);
+
+    /* Out of range or the wrong type: that field only becomes unknown. */
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"h\",\"lan_rx_bps\":-1,"
+                "\"lan_tx_bps\":2e13,\"lan_mbps\":0,\"roce_rx_bps\":\"1\","
+                "\"cip_bps\":1e13,\"ssd_rd_Bps\":5}",
+                &f) == FRAME_OK);
+    CHECK(isnan(f.lan_rx_bps) && isnan(f.lan_tx_bps) && isnan(f.lan_mbps));
+    CHECK(isnan(f.roce_rx_bps) && isnan(f.roce_tx_bps));
+    CHECK(f.cip_bps == 1e13 && f.ssd_rd_bytes_s == 5 && isnan(f.ssd_wr_bytes_s));
+
+    /* Disk: both or neither, and used <= size. */
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"h\",\"disk_used_gb\":5000,"
+                "\"disk_size_gb\":4032}",
+                &f) == FRAME_OK);
+    CHECK(isnan(f.disk_used_gb) && isnan(f.disk_size_gb));
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"h\",\"disk_used_gb\":5}", &f) ==
+          FRAME_OK);
+    CHECK(isnan(f.disk_used_gb) && isnan(f.disk_size_gb));
+}
+
 static void test_parse_minimal_frame_is_all_unknown(void)
 {
     status_frame_t f;
@@ -103,6 +138,10 @@ static void test_parse_minimal_frame_is_all_unknown(void)
     CHECK(isnan(f.fan0_rpm));
     CHECK(isnan(f.board_c));
     CHECK(f.n_temps == 0);
+    CHECK(isnan(f.lan_rx_bps) && isnan(f.lan_tx_bps) && isnan(f.lan_mbps));
+    CHECK(isnan(f.roce_rx_bps) && isnan(f.roce_tx_bps) && isnan(f.cip_bps));
+    CHECK(isnan(f.ssd_rd_bytes_s) && isnan(f.ssd_wr_bytes_s));
+    CHECK(isnan(f.disk_used_gb) && isnan(f.disk_size_gb));
 }
 
 static void test_parse_rejects(void)
@@ -1171,6 +1210,7 @@ int main(void)
 {
     test_parse_real_frame();
     test_parse_minimal_frame_is_all_unknown();
+    test_parse_net_and_storage();
     test_parse_rejects();
     test_parse_bad_optional_fields_become_unknown();
     test_parse_size_cap();

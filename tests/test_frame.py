@@ -19,7 +19,7 @@ def _full() -> Snapshot:
         load=(0.95, 0.54, 0.32),
         cpu_pct=5.17,
         mem_used_gib=7.6998,
-        mem_total_gib=121.6875,
+        mem_total_gib=127.875,
         gpu_pct=3,
         gpu_w=4.6,
         gpu_c=43,
@@ -29,6 +29,16 @@ def _full() -> Snapshot:
         nvme_c=44.85,
         nic_c=49.0,
         temps=[("tz0", 49.5), ("nvme", 44.85), ("nic0", 49.0)],
+        lan_rx_bps=32_640.4,
+        lan_tx_bps=67_400.6,
+        lan_mbps=2500,
+        roce_rx_bps=180e9,
+        roce_tx_bps=0.0,
+        cip_bps=3_680.0,
+        ssd_rd_bytes_s=115_194_000.2,
+        ssd_wr_bytes_s=767_000.0,
+        disk_used_gb=3340,
+        disk_size_gb=4032,
     )
 
 
@@ -53,7 +63,7 @@ def test_full_frame_values() -> None:
         "load15": 0.32,
         "cpu_pct": 5.2,
         "mem_used_gib": 7.7,
-        "mem_total_gib": 121.7,
+        "mem_total_gib": 127.9,
         "gpu_pct": 3,
         "gpu_w": 5,
         "gpu_c": 43,
@@ -64,6 +74,16 @@ def test_full_frame_values() -> None:
         "nvme_c": 44.9,
         "nic_c": 49.0,
         "th": [["tz0", 49.5], ["nvme", 44.9], ["nic0", 49.0]],
+        "lan_rx_bps": 32640,
+        "lan_tx_bps": 67401,
+        "lan_mbps": 2500,
+        "roce_rx_bps": 180_000_000_000,
+        "roce_tx_bps": 0,
+        "cip_bps": 3680,
+        "ssd_rd_Bps": 115_194_000,
+        "ssd_wr_Bps": 767_000,
+        "disk_used_gb": 3340,
+        "disk_size_gb": 4032,
     }
 
 
@@ -146,3 +166,76 @@ def test_control_and_quote_characters_stay_inside_json(bad: str) -> None:
 def test_absurd_tz_offset_is_omitted() -> None:
     f = _decode(encode_frame(Snapshot(t=1, host="test-host", tz_s=20 * 3600)))
     assert "tz_s" not in f
+
+
+def _worst() -> Snapshot:
+    """Every field present at its longest."""
+    big = 9_999_999_999_999.0  # just under MAX_RATE: 13 digits
+    return Snapshot(
+        t=9_999_999_999,
+        host="h" * 500,
+        tz_s=-50400,
+        up_s=9_999_999_999,
+        load=(9999.99, 9999.99, 9999.99),
+        cpu_pct=100.0,
+        mem_used_gib=4095.9,
+        mem_total_gib=4095.9,
+        gpu_pct=100,
+        gpu_w=2000.0,
+        gpu_c=-40,
+        occ="o" * 500,
+        fans={"fan0": 30000, "fan1": 30000},
+        board_c=-40.5,
+        nvme_c=-40.5,
+        nic_c=-40.5,
+        temps=[("x" * 40, -40.5)] * 100,
+        lan_rx_bps=big,
+        lan_tx_bps=big,
+        lan_mbps=9_999_999,
+        roce_rx_bps=big,
+        roce_tx_bps=big,
+        cip_bps=big,
+        ssd_rd_bytes_s=big,
+        ssd_wr_bytes_s=big,
+        disk_used_gb=999_999_999,
+        disk_size_gb=999_999_999,
+    )
+
+
+def test_worst_case_frame_fits_with_every_overview_field() -> None:
+    """Only `th` may be cut. Every overview field survives the worst case."""
+    s = _worst()
+    line = encode_frame(s)
+    assert len(line) <= MAX_LINE_BYTES
+    f = _decode(line)
+    s.temps = []
+    overview = _decode(encode_frame(s))
+    assert {k: v for k, v in f.items() if k != "th"} == overview
+    assert len(overview) == 30
+    # Room left for the detail list: at least a few sensors always fit.
+    assert len(encode_frame(s)) < MAX_LINE_BYTES - 200
+
+
+@pytest.mark.parametrize(
+    "field", ["lan_rx_bps", "roce_tx_bps", "cip_bps", "ssd_rd_bytes_s"]
+)
+@pytest.mark.parametrize("bad", [-1.0, math.nan, math.inf, 2e13])
+def test_bad_rates_are_omitted(field: str, bad: float) -> None:
+    s = _full()
+    setattr(s, field, bad)
+    f = _decode(encode_frame(s))
+    key = field.replace("_bytes_s", "_Bps")
+    assert key not in f
+
+
+def test_disk_used_over_size_is_omitted() -> None:
+    s = _full()
+    s.disk_used_gb = 5000
+    f = _decode(encode_frame(s))
+    assert "disk_used_gb" not in f and "disk_size_gb" not in f
+
+
+def test_link_speed_must_be_positive() -> None:
+    s = _full()
+    s.lan_mbps = -1  # /sys/class/net/X/speed reads -1 when the link is down
+    assert "lan_mbps" not in _decode(encode_frame(s))
