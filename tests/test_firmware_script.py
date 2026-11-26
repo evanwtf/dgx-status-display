@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -13,10 +16,13 @@ from firmware import (
     BACKUP,
     BOARD_STEPS,
     COMMANDS,
+    ESPTOOL_VERSION,
     FLASH_SIZE,
     IDF_IMAGE,
+    IDF_VERSION,
     MERGED,
     archive_elf,
+    backup_problem,
     board_argv,
     board_command,
     coredump_argv,
@@ -73,6 +79,17 @@ def test_readme_uses_the_same_image_pin() -> None:
     """The README flash commands and the build must use one image."""
     readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
     assert f"export IDF_IMAGE={IDF_IMAGE}" in readme
+
+
+def test_readme_repeats_every_version_fact_from_the_pin() -> None:
+    """A pin bump fails here until the README follows it."""
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    assert IDF_IMAGE.startswith(f"espressif/idf:{IDF_VERSION}@")
+    assert set(re.findall(r"espressif/idf:(v[0-9.]+)", readme)) == {IDF_VERSION}
+    assert f"exactly {IDF_VERSION}" in readme
+    assert f"ESP-IDF {IDF_VERSION}" in readme
+    assert set(re.findall(r"esptool==([0-9.]+)", readme)) == {ESPTOOL_VERSION}
+    assert f"({ESPTOOL_VERSION})" in readme
 
 
 def test_preview_step_renders_into_the_ignored_preview_dir() -> None:
@@ -197,15 +214,30 @@ def test_monitor_argv_is_interactive_only_when_asked() -> None:
     assert argv[4:9] == ["--device=/dev/ttyACM0", "--group-add", "20", "-i", "-t"]
 
 
-def test_resolve_port_needs_one_character_device(tmp_path: Path) -> None:
+def test_resolve_port_refuses_what_is_not_a_usb_tty(tmp_path: Path) -> None:
     assert resolve_port(str(tmp_path / "missing")) is None
     plain = tmp_path / "ttyX"
     plain.touch()
     assert resolve_port(str(plain)) is None  # a file, not a device
-    assert resolve_port("/dev/null") == "/dev/null"
-    assert resolve_port("/dev/nul*") == "/dev/null"
+    assert resolve_port("/dev/null") is None  # a device, but not a tty
     (tmp_path / "ttyY").touch()
     assert resolve_port(str(tmp_path / "tty*")) is None  # two matches
+
+
+def test_resolve_port_takes_a_usb_tty_and_warns_off_by_id(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(os.path, "realpath", lambda p: "/dev/ttyACM0")
+    monkeypatch.setattr(firmware, "is_char_device", lambda p: True)
+    by_id = "/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_X-if00"
+    with caplog.at_level(logging.WARNING, logger="firmware"):
+        assert resolve_port(by_id) == "/dev/ttyACM0"
+    assert not caplog.records
+    with caplog.at_level(logging.WARNING, logger="firmware"):
+        assert resolve_port("/dev/ttyACM0") == "/dev/ttyACM0"
+    assert "not an Espressif port" in caplog.text
+    monkeypatch.setattr(os.path, "realpath", lambda p: "/dev/ttyS0")
+    assert resolve_port("/dev/ttyS0") is None
 
 
 def test_board_steps_refuse_without_a_port() -> None:
@@ -215,84 +247,199 @@ def test_board_steps_refuse_without_a_port() -> None:
         assert e.value.code == 2
 
 
+Calls = list[list[str]]
+
+
+@pytest.fixture
+def board_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Calls:
+    """A fake checkout and a ready fake port. No container can start: every
+    subprocess.call is recorded, and returns 0."""
+    calls: Calls = []
+
+    def fake_call(cmd: list[str], **_: object) -> int:
+        calls.append(cmd)
+        return 0
+
+    monkeypatch.setattr(firmware, "REPO", tmp_path)
+    monkeypatch.setattr(firmware, "service_active", lambda: False)
+    monkeypatch.setattr(firmware, "resolve_port", lambda port: "/dev/ttyACM0")
+    monkeypatch.setattr(firmware, "device_gid", lambda dev: 20)
+    monkeypatch.setattr(subprocess, "call", fake_call)
+    return calls
+
+
+def make_build(repo: Path) -> None:
+    (repo / "firmware/build").mkdir(parents=True)
+    (repo / "firmware/build/flash_args").touch()
+    (repo / MERGED).write_bytes(b"merged")
+
+
+def make_backup(repo: Path, data: bytes = b"factory") -> Path:
+    backup = repo / BACKUP
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    backup.write_bytes(data)
+    write_sha256(backup)
+    return backup
+
+
 def test_board_step_refuses_while_the_service_runs(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, board_env: Calls
 ) -> None:
-    calls: list[list[str]] = []
-
-    def fake_call(cmd: list[str]) -> int:
-        calls.append(cmd)
-        return 0
-
-    monkeypatch.setattr(firmware, "REPO", tmp_path)
     monkeypatch.setattr(firmware, "service_active", lambda: True)
-    monkeypatch.setattr(subprocess, "call", fake_call)
-    (tmp_path / "firmware/build").mkdir(parents=True)
-    (tmp_path / "firmware/build/flash_args").touch()
-    assert firmware.main(["flash", "--port", "/dev/null"]) == 2
-    assert calls == []
+    make_build(tmp_path)
+    make_backup(tmp_path)
+    assert firmware.main(["flash", "--port", "/dev/ttyACM0"]) == 2
+    assert board_env == []
 
 
-def test_flash_refuses_without_a_build(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_port_ready_refuses_a_bad_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, board_env: Calls
 ) -> None:
-    monkeypatch.setattr(firmware, "REPO", tmp_path)
-    monkeypatch.setattr(firmware, "service_active", lambda: False)
-    assert firmware.main(["flash", "--port", "/dev/null"]) == 2
-    assert firmware.main(["flash-merged", "--port", "/dev/null"]) == 2
+    monkeypatch.setattr(firmware, "resolve_port", lambda port: None)
+    make_build(tmp_path)
+    make_backup(tmp_path)
+    assert firmware.main(["flash", "--port", "/dev/ttyACM0"]) == 2
+    assert board_env == []
 
 
-def test_backup_never_replaces_a_backup(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_flash_refuses_without_a_build(tmp_path: Path, board_env: Calls) -> None:
+    make_backup(tmp_path)
+    assert firmware.main(["flash", "--port", "/dev/ttyACM0"]) == 2
+    assert firmware.main(["flash-merged", "--port", "/dev/ttyACM0"]) == 2
+    assert board_env == []
+
+
+@pytest.mark.parametrize("step", ["flash", "flash-merged"])
+def test_flash_refuses_without_a_backup(
+    tmp_path: Path, board_env: Calls, step: str
 ) -> None:
-    calls: list[list[str]] = []
+    make_build(tmp_path)
+    assert backup_problem(tmp_path) is not None
+    assert firmware.main([step, "--port", "/dev/ttyACM0"]) == 2
+    # The backup without its .sha256 is not enough either.
+    (tmp_path / "backup").mkdir()
+    (tmp_path / BACKUP).write_bytes(b"factory")
+    assert firmware.main([step, "--port", "/dev/ttyACM0"]) == 2
+    assert board_env == []
 
-    def fake_call(cmd: list[str]) -> int:
+
+@pytest.mark.parametrize("step", ["flash", "flash-merged"])
+def test_flash_refuses_a_backup_that_does_not_match(
+    tmp_path: Path, board_env: Calls, step: str
+) -> None:
+    make_build(tmp_path)
+    backup = make_backup(tmp_path)
+    backup.write_bytes(b"changed")
+    assert "does not match" in (backup_problem(tmp_path) or "")
+    assert firmware.main([step, "--port", "/dev/ttyACM0"]) == 2
+    assert board_env == []
+
+
+@pytest.mark.parametrize("step", ["flash", "flash-merged"])
+def test_flash_runs_with_a_matching_backup(
+    tmp_path: Path, board_env: Calls, step: str
+) -> None:
+    make_build(tmp_path)
+    make_backup(tmp_path)
+    assert backup_problem(tmp_path) is None
+    assert firmware.main([step, "--port", "/dev/ttyACM0"]) == 0
+    assert len(board_env) == 1
+    assert board_env[0][-1] == board_command(step, "/dev/ttyACM0")
+
+
+@pytest.mark.parametrize("step", ["flash", "flash-merged"])
+def test_no_backup_overrides_the_backup_check(
+    tmp_path: Path, board_env: Calls, step: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    make_build(tmp_path)
+    with caplog.at_level(logging.WARNING, logger="firmware"):
+        assert firmware.main([step, "--port", "/dev/ttyACM0", "--no-backup"]) == 0
+    assert "no factory backup" in caplog.text
+    assert len(board_env) == 1
+
+
+def test_no_backup_is_for_flash_steps_only() -> None:
+    for argv in (["backup", "--port", "/dev/ttyACM0"], ["build"]):
+        with pytest.raises(SystemExit):
+            firmware.main([*argv, "--no-backup"])
+
+
+def test_flash_merged_warns_that_it_erases_the_settings(
+    tmp_path: Path, board_env: Calls, caplog: pytest.LogCaptureFixture
+) -> None:
+    make_build(tmp_path)
+    make_backup(tmp_path)
+    with caplog.at_level(logging.WARNING, logger="firmware"):
+        assert firmware.main(["flash-merged", "--port", "/dev/ttyACM0"]) == 0
+    assert "erases the board's settings (rotation, chart style)" in caplog.text
+
+
+def test_backup_never_replaces_a_backup(tmp_path: Path, board_env: Calls) -> None:
+    old = make_backup(tmp_path)
+    assert firmware.main(["backup", "--port", "/dev/ttyACM0"]) == 2
+    assert old.read_bytes() == b"factory"
+    assert board_env == []
+
+
+def full_image() -> bytes:
+    return bytes(range(256)) * (FLASH_SIZE // 256)
+
+
+def fake_read(monkeypatch: pytest.MonkeyPatch, data: bytes, calls: Calls) -> None:
+    """subprocess.call that writes `data` to the .part file the command names."""
+
+    def call(cmd: list[str], **_: object) -> int:
         calls.append(cmd)
+        part = re.search(r"read_flash 0 0x1000000 (\S+)", cmd[-1])
+        assert part is not None
+        (firmware.REPO / part.group(1)).write_bytes(data)
         return 0
 
-    monkeypatch.setattr(firmware, "REPO", tmp_path)
-    monkeypatch.setattr(firmware, "service_active", lambda: False)
-    monkeypatch.setattr(subprocess, "call", fake_call)
-    old = tmp_path / BACKUP
-    old.parent.mkdir()
-    old.write_bytes(b"factory")
-    assert firmware.main(["backup", "--port", "/dev/null"]) == 2
-    assert old.read_bytes() == b"factory"
-    assert calls == []
+    monkeypatch.setattr(subprocess, "call", call)
 
 
 def test_backup_keeps_a_full_read_and_its_sha256(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, board_env: Calls
 ) -> None:
-    image = bytes(range(256)) * (FLASH_SIZE // 256)
-
-    def fake_call(cmd: list[str]) -> int:
-        (tmp_path / f"{BACKUP}.part").write_bytes(image)
-        return 0
-
-    monkeypatch.setattr(firmware, "REPO", tmp_path)
-    monkeypatch.setattr(firmware, "service_active", lambda: False)
-    monkeypatch.setattr(subprocess, "call", fake_call)
-    assert firmware.main(["backup", "--port", "/dev/null"]) == 0
+    image = full_image()
+    fake_read(monkeypatch, image, board_env)
+    assert firmware.main(["backup", "--port", "/dev/ttyACM0"]) == 0
     kept = tmp_path / BACKUP
     assert kept.read_bytes() == image
-    assert not (tmp_path / f"{BACKUP}.part").exists()
+    assert list((tmp_path / "backup").glob("*.part")) == []
     sums = (tmp_path / f"{BACKUP}.sha256").read_text()
     assert sums == f"{hashlib.sha256(image).hexdigest()}  factory-16MB.bin\n"
+    # The .part name is unique to this run.
+    assert f"{BACKUP}.{os.getpid()}.part" in board_env[0][-1]
+
+
+def test_backup_never_replaces_one_that_appears_during_the_read(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, board_env: Calls
+) -> None:
+    image = full_image()
+
+    def call(cmd: list[str], **_: object) -> int:
+        board_env.append(cmd)
+        part = re.search(r"read_flash 0 0x1000000 (\S+)", cmd[-1])
+        assert part is not None
+        (tmp_path / part.group(1)).write_bytes(image)
+        (tmp_path / BACKUP).write_bytes(b"another run's backup")
+        return 0
+
+    monkeypatch.setattr(subprocess, "call", call)
+    assert firmware.main(["backup", "--port", "/dev/ttyACM0"]) == 1
+    assert (tmp_path / BACKUP).read_bytes() == b"another run's backup"
+    # The read is kept, not lost.
+    parts = list((tmp_path / "backup").glob("*.part"))
+    assert len(parts) == 1
+    assert parts[0].read_bytes() == image
 
 
 def test_backup_refuses_a_short_read(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, board_env: Calls
 ) -> None:
-    def fake_call(cmd: list[str]) -> int:
-        (tmp_path / f"{BACKUP}.part").write_bytes(b"short")
-        return 0
-
-    monkeypatch.setattr(firmware, "REPO", tmp_path)
-    monkeypatch.setattr(firmware, "service_active", lambda: False)
-    monkeypatch.setattr(subprocess, "call", fake_call)
-    assert firmware.main(["backup", "--port", "/dev/null"]) == 1
+    fake_read(monkeypatch, b"short", board_env)
+    assert firmware.main(["backup", "--port", "/dev/ttyACM0"]) == 1
     assert not (tmp_path / BACKUP).exists()
 
 
@@ -306,4 +453,4 @@ def test_write_sha256_matches_sha256sum_format(tmp_path: Path) -> None:
 
 def test_other_steps_take_no_port() -> None:
     with pytest.raises(SystemExit):
-        firmware.main(["build", "--port", "/dev/null"])
+        firmware.main(["build", "--port", "/dev/ttyACM0"])

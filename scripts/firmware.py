@@ -37,10 +37,16 @@ refuses while the dgx-status service is active: the daemon holds the port.
 `flash` writes the build's parts from firmware/build/flash_args, so the
 board's stored settings (NVS) stay. `flash-merged` writes the merged image
 at 0x0 (run `merge` first). It erases NVS: use it for a first install.
+Both refuse unless backup/factory-16MB.bin and its .sha256 exist and match;
+`--no-backup` skips that check.
+
+The port must resolve to /dev/ttyACM* or /dev/ttyUSB*.
 
 `backup` reads the whole 16 MB flash to backup/factory-16MB.bin, reads the
 chip again to verify it, and writes factory-16MB.bin.sha256 next to it. It
-refuses to replace an existing backup. Before the read it logs `flash_id`
+refuses to replace an existing backup, even one that appears during the
+read: it reads into a per-run .part file, fsyncs it, and links it into
+place, which fails if the name exists. Before the read it logs `flash_id`
 and `get_security_info`: check for a 16 MB flash, and secure boot and flash
 encryption off.
 
@@ -60,6 +66,7 @@ without the board.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import glob
 import hashlib
 import logging
@@ -73,10 +80,14 @@ from pathlib import Path
 
 logger = logging.getLogger("firmware")
 
+IDF_VERSION = "v5.5.6"
 IDF_IMAGE = (
-    "espressif/idf:v5.5.6"
+    f"espressif/idf:{IDF_VERSION}"
     "@sha256:bf72fe7a15c22849a9a94147301165a545fb8905d97c176cf748e3e4614cac84"
 )
+# The esptool in IDF_IMAGE (`esptool.py version`). The README's host flash on
+# macOS pins the same version; a test keeps them equal.
+ESPTOOL_VERSION = "4.12.0"
 REPO = Path(__file__).resolve().parent.parent
 ELF = "firmware/build/dgx_status_display.elf"
 MERGED = "firmware/build/dgx_status_display-merged.bin"
@@ -138,8 +149,11 @@ def esptool(device: str, *args: str) -> str:
     )
 
 
-def board_command(step: str, device: str) -> str:
-    """The shell command for one board step. Pure, so tests can check it."""
+def board_command(step: str, device: str, *, part: str = f"{BACKUP}.part") -> str:
+    """The shell command for one board step. Pure, so tests can check it.
+
+    `part` is the file that `backup` reads the flash into.
+    """
     reset = ("--before", "default_reset", "--after", "hard_reset")
     if step == "flash":
         return "cd firmware/build && " + esptool(
@@ -150,7 +164,6 @@ def board_command(step: str, device: str) -> str:
             device, *reset, "write_flash", "0x0", Path(MERGED).name
         )
     if step == "backup":
-        part = f"{BACKUP}.part"
         size = f"{FLASH_SIZE:#x}"
         return " && ".join(
             [
@@ -196,9 +209,10 @@ def board_argv(
     device_gid: int | None,
     *,
     interactive: bool = False,
+    part: str = f"{BACKUP}.part",
 ) -> list[str]:
     """`docker run` for one board step, with the one device it needs."""
-    argv = docker_argv(board_command(step, device), repo, uid, gid)
+    argv = docker_argv(board_command(step, device, part=part), repo, uid, gid)
     return with_device(argv, device, device_gid, interactive=interactive)
 
 
@@ -230,16 +244,36 @@ def coredump_argv(
     return argv
 
 
+SERIAL_DEVICES = ("/dev/ttyACM*", "/dev/ttyUSB*")
+BY_ID = "/dev/serial/by-id/"
+
+
+def is_char_device(path: str) -> bool:
+    return Path(path).is_char_device()
+
+
 def resolve_port(port: str) -> str | None:
-    """The one character device that `port` (a path or a glob) names."""
+    """The one USB serial device that `port` (a path or a glob) names."""
     matches = glob.glob(port) if glob.has_magic(port) else [port]
     if len(matches) != 1:
         logger.error("%s matches %d ports, not one", port, len(matches))
         return None
-    dev = os.path.realpath(matches[0])
-    if not Path(dev).is_char_device():
+    path = matches[0]
+    dev = os.path.realpath(path)
+    if not any(fnmatch.fnmatchcase(dev, pat) for pat in SERIAL_DEVICES):
+        logger.error(
+            "%s resolves to %s, not %s", port, dev, " or ".join(SERIAL_DEVICES)
+        )
+        return None
+    if not is_char_device(dev):
         logger.error("%s is not a serial device", port)
         return None
+    if not (path.startswith(BY_ID) and "Espressif" in path):
+        logger.warning(
+            "%s is not an Espressif port under %s; check it is the board",
+            port,
+            BY_ID,
+        )
     return dev
 
 
@@ -276,7 +310,37 @@ def write_sha256(path: Path) -> Path:
     return out
 
 
-def board(step: str, port: str) -> int:
+def backup_problem(repo: Path) -> str | None:
+    """Why the factory backup is not safe to rely on, or None when it is."""
+    backup = repo / BACKUP
+    sums = backup.with_name(backup.name + ".sha256")
+    if not backup.exists() or not sums.exists():
+        return f"no {BACKUP} and {Path(BACKUP).name}.sha256: run the backup first"
+    want = sums.read_text(encoding="utf-8").split()
+    digest = hashlib.sha256(backup.read_bytes()).hexdigest()
+    if want[:2] != [digest, backup.name]:
+        return f"{BACKUP} does not match {sums.name}"
+    return None
+
+
+def device_gid(dev: str) -> int:
+    return os.stat(dev).st_gid
+
+
+def keep_backup(part: Path, backup: Path) -> bool:
+    """Fsync `part`, then link it to `backup`. Never replaces a backup."""
+    with part.open("rb") as f:
+        os.fsync(f.fileno())
+    try:
+        os.link(part, backup)
+    except FileExistsError:
+        logger.error("%s appeared during the read; kept the read as %s", backup, part)
+        return False
+    part.unlink()
+    return True
+
+
+def board(step: str, port: str, *, no_backup: bool = False) -> int:
     """Run one board step. Each refusal logs why and returns 2."""
     if step == "flash" and not (REPO / FLASH_ARGS).exists():
         logger.error("no %s: build first", FLASH_ARGS)
@@ -284,8 +348,15 @@ def board(step: str, port: str) -> int:
     if step == "flash-merged" and not (REPO / MERGED).exists():
         logger.error("no %s: build, then merge, first", MERGED)
         return 2
+    if step in ("flash", "flash-merged"):
+        problem = backup_problem(REPO)
+        if problem is not None and not no_backup:
+            logger.error("refused: %s (--no-backup flashes without one)", problem)
+            return 2
+        if problem is not None:
+            logger.warning("flashing with no factory backup: %s", problem)
     backup = REPO / BACKUP
-    part = backup.with_name(backup.name + ".part")
+    part = backup.with_name(f"{backup.name}.{os.getpid()}.part")
     if step == "backup":
         if backup.exists():
             logger.error("%s exists; move it away to take a new backup", BACKUP)
@@ -295,14 +366,17 @@ def board(step: str, port: str) -> int:
     dev = port_ready(port)
     if dev is None:
         return 2
+    if step == "flash-merged":
+        logger.warning("this erases the board's settings (rotation, chart style)")
     cmd = board_argv(
         step,
         REPO,
         os.getuid(),
         os.getgid(),
         dev,
-        os.stat(dev).st_gid,
+        device_gid(dev),
         interactive=step == "monitor" and sys.stdin.isatty(),
+        part=part.relative_to(REPO).as_posix(),
     )
     logger.info("running: %s", shlex.join(cmd))
     rc = subprocess.call(cmd)
@@ -312,7 +386,8 @@ def board(step: str, port: str) -> int:
     if size != FLASH_SIZE:
         logger.error("%s holds %d bytes, not %d", part, size, FLASH_SIZE)
         return 1
-    part.rename(backup)
+    if not keep_backup(part, backup):
+        return 1
     sums = write_sha256(backup)
     logger.info("backed up the flash to %s and %s", BACKUP, sums.relative_to(REPO))
     logger.info("copy both files off this machine")
@@ -374,7 +449,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     src.add_argument("--core", help="coredump: decode a saved core file instead")
     p.add_argument("--elf", help=f"coredump: the flashed build's ELF (default {ELF})")
+    p.add_argument(
+        "--no-backup",
+        action="store_true",
+        help="flash, flash-merged: flash with no checked factory backup",
+    )
     args = p.parse_args(argv)
+    if args.no_backup and args.step not in BOARD_STEPS:
+        p.error("--no-backup is for flash and flash-merged only")
     if args.step == "coredump":
         if not (args.port or args.core):
             p.error("coredump needs --port or --core")
@@ -384,7 +466,9 @@ def main(argv: list[str] | None = None) -> int:
             p.error(f"{args.step} needs --port")
         if args.core or args.elf:
             p.error("--core and --elf are for coredump only")
-        return board(args.step, args.port)
+        if args.no_backup and args.step not in ("flash", "flash-merged"):
+            p.error("--no-backup is for flash and flash-merged only")
+        return board(args.step, args.port, no_backup=args.no_backup)
     if args.port or args.core or args.elf:
         p.error("--port, --core and --elf are for board steps and coredump only")
     cmd = docker_argv(COMMANDS[args.step], REPO, os.getuid(), os.getgid())
