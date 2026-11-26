@@ -5,6 +5,8 @@
 
 #include "display.h"
 #include "esp_app_desc.h"
+#include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "logic/burnin.h"
 #include "logic/fmt.h"
@@ -41,7 +43,16 @@ static lv_obj_t *s_d_clock, *s_d_col[2], *s_d_footer;
 /* NO DATA */
 static lv_obj_t *s_n_age, *s_n_host;
 
+static const char *TAG = "ui";
+
 static page_t s_page = PAGE_OVERVIEW;
+static bool s_first_refresh_done;
+static int s_applied_brightness = -1;
+static int64_t s_last_change_ms;
+static char s_last_occ[STATUS_OCC_MAX + 1];
+static bool s_wdt_subscribed;
+static int64_t s_last_stack_log_ms = -60000;
+static uint32_t s_lvgl_stack_free;
 static bool s_page_dirty = true;
 static int s_last_state = -1;
 static shift_t s_last_shift = {127, 127};
@@ -85,11 +96,24 @@ static void set_color(lv_obj_t *l, uint32_t color)
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
 }
 
+static int64_t now_ms(void)
+{
+    return esp_timer_get_time() / 1000;
+}
+
 static void on_tap(lv_event_t *e)
 {
     (void)e;
     s_page = s_page == PAGE_OVERVIEW ? PAGE_DETAIL : PAGE_OVERVIEW;
     s_page_dirty = true;
+    s_last_change_ms = now_ms();
+}
+
+/* LVGL sends REFR_READY after a refresh has been flushed to the panel. */
+static void on_refresh_ready(lv_event_t *e)
+{
+    (void)e;
+    s_first_refresh_done = true;
 }
 
 static void build_overview(void)
@@ -211,9 +235,10 @@ static void update_detail(const rx_snapshot_t *rx)
         }
         set_text(s_d_col[c], f->n_temps ? col[c] : (c == 0 ? FMT_DASH : ""));
     }
-    snprintf(line, sizeof(line), "frames %lu  rejected %lu\nfw %s",
+    snprintf(line, sizeof(line), "frames %lu  rejected %lu  fw %s\nstack free: rx %lu, ui %lu B",
              (unsigned long)rx->accepted, (unsigned long)rx->rejected,
-             esp_app_get_description()->version);
+             esp_app_get_description()->version, (unsigned long)serial_rx_stack_free(),
+             (unsigned long)s_lvgl_stack_free);
     set_text(s_d_footer, line);
 }
 
@@ -230,10 +255,39 @@ static void update_nodata(const rx_snapshot_t *rx, int64_t age_s)
     }
 }
 
+/* The LVGL task feeds the task watchdog from this timer. If the LVGL task
+ * hangs, the timer stops, the watchdog fires, and the panic handler reboots
+ * the board (CONFIG_ESP_TASK_WDT_PANIC). A hung UI must not sit on a stale
+ * LIVE screen. */
+static void feed_watchdog(void)
+{
+    if (!s_wdt_subscribed) {
+        esp_err_t err = esp_task_wdt_add(NULL);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "task watchdog subscribe failed: %s", esp_err_to_name(err));
+            return;
+        }
+        s_wdt_subscribed = true;
+    }
+    esp_task_wdt_reset();
+}
+
+static void log_stack(int64_t now)
+{
+    s_lvgl_stack_free = (uint32_t)uxTaskGetStackHighWaterMark(NULL);
+    if (now - s_last_stack_log_ms >= 60000) {
+        ESP_LOGI(TAG, "stack free (high-water): rx %lu B, lvgl %lu B",
+                 (unsigned long)serial_rx_stack_free(), (unsigned long)s_lvgl_stack_free);
+        s_last_stack_log_ms = now;
+    }
+}
+
 static void tick(lv_timer_t *t)
 {
     (void)t;
-    int64_t now = esp_timer_get_time() / 1000;
+    int64_t now = now_ms();
+    feed_watchdog();
+    log_stack(now);
     serial_rx_get(&s_rx);
     link_state_t st = link_state(&s_rx.link, now);
     int64_t age_s = link_age_s(&s_rx.link, now);
@@ -244,9 +298,20 @@ static void tick(lv_timer_t *t)
         s_last_shift = sh;
     }
     if ((int)st != s_last_state) {
-        display_set_brightness(burnin_brightness(st));
         s_last_state = (int)st;
         s_page_dirty = true;
+        s_last_change_ms = now;
+    }
+    if (strcmp(s_last_occ, s_rx.frame.occ) != 0) {
+        snprintf(s_last_occ, sizeof(s_last_occ), "%s", s_rx.frame.occ);
+        s_last_change_ms = now;
+    }
+    /* No brightness before the first frame reaches the panel: the panel
+     * starts at 0 (display.c), so nothing flashes. */
+    int level = burnin_brightness(st, now - s_last_change_ms);
+    if (s_first_refresh_done && level != s_applied_brightness) {
+        display_set_brightness((uint8_t)level);
+        s_applied_brightness = level;
     }
     if (s_page_dirty) {
         bool nodata = st == LINK_NO_DATA;
@@ -282,6 +347,9 @@ void ui_init(void)
     lv_obj_set_hidden(s_overview, true);
     lv_obj_set_hidden(s_detail, true);
 
+    lv_display_add_event_cb(lv_display_get_default(), on_refresh_ready, LV_EVENT_REFR_READY,
+                            NULL);
+    s_last_change_ms = now_ms();
     tick(NULL);
     lv_timer_create(tick, UI_PERIOD_MS, NULL);
 }

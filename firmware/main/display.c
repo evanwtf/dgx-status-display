@@ -16,11 +16,18 @@
 static const char *TAG = "display";
 
 /*
- * CO5300 init sequence: Waveshare's ESP-IDF 09_LVGL_V9_Test
- * (components/port_bsp/display_bsp.cpp, lcd_init_cmds), unchanged except
- * 0x51 (brightness). The demo starts at 0xFF (full); this starts at 0x00 so
- * the panel does not flash full white before the first frame, and main sets
- * a moderate level once LVGL has drawn.
+ * CO5300 init sequence. The same 2.16-inch panel sequence appears in two
+ * permissively licensed sources (identical except MADCTL):
+ *  - Espressif esp-brookesia (CC0-1.0), commit 2bb43d86:
+ *    https://github.com/espressif/esp-brookesia/blob/2bb43d86b0f5f7fd70b6323eddfd7c0476095c93/hal/brookesia_hal_boards/boards/waveshare/esp32_s3_touch_amoled_2_16/setup_device.c#L19-L37
+ *  - Waveshare-ESP32-components (Apache-2.0), commit 23a6012d:
+ *    https://github.com/waveshareteam/Waveshare-ESP32-components/blob/23a6012d5e87d27399cf90fb851cab3689e29159/bsp/esp32_s3_touch_amoled_2_16/esp32_s3_touch_amoled_2_16.c#L53-L71
+ * Those are for the S3 board (MADCTL 0x36 = 0xA0). The C6 values (MADCTL
+ * 0x36 = 0x30, which matches the C6 touch orientation flags) come from
+ * Waveshare's C6 demo, 02_Example/ESP-IDF-v5.5.3/09_LVGL_V9_Test
+ * (display_bsp.cpp). One change from all three: 0x51 (brightness) starts at
+ * 0x00, not 0xFF, so the panel does not flash full white. ui.c sets the
+ * working level once LVGL's first refresh has finished.
  */
 static const sh8601_lcd_init_cmd_t s_init_cmds[] = {
     {0x11, (uint8_t[]){0x00}, 0, 600},
@@ -152,7 +159,12 @@ esp_err_t display_init(void)
     };
     i2c_master_bus_handle_t i2c_bus = NULL;
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_cfg, &i2c_bus), TAG, "i2c bus");
-    ESP_RETURN_ON_ERROR(axp2101_init(i2c_bus), TAG, "pmu");
+    const esp_err_t pmu = axp2101_init(i2c_bus);
+    if (pmu != ESP_OK) {
+        /* Keep going: the PMU's power-on defaults may still power the panel,
+         * and the rest of the firmware is still useful. */
+        ESP_LOGE(TAG, "PMU init failed (%s); no panel power cycle", esp_err_to_name(pmu));
+    }
 
     const spi_bus_config_t bus_cfg = SH8601_PANEL_BUS_QSPI_CONFIG(
         BOARD_LCD_SCLK, BOARD_LCD_D0, BOARD_LCD_D1, BOARD_LCD_D2, BOARD_LCD_D3,
@@ -177,7 +189,9 @@ esp_err_t display_init(void)
         .vendor_config = &vendor,
     };
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_sh8601(s_io, &panel_cfg, &s_panel), TAG, "panel");
-    ESP_RETURN_ON_ERROR(axp2101_panel_power_cycle(), TAG, "panel power");
+    if (pmu == ESP_OK) {
+        ESP_RETURN_ON_ERROR(axp2101_panel_power_cycle(), TAG, "panel power");
+    }
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "panel init");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_panel, true), TAG, "panel on");
 

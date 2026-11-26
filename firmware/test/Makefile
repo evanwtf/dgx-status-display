@@ -17,7 +17,9 @@ CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion \
 	-fsanitize=address,undefined -fno-sanitize-recover=all \
 	-I../main/logic -I$(CJSON_DIR)
 # cJSON is third-party code: build it without our warning set.
-CJSON_CFLAGS := -std=c99 -O1 -g -fsanitize=address,undefined -I$(CJSON_DIR)
+# Same nesting limit as the firmware build (firmware/CMakeLists.txt).
+CJSON_CFLAGS := -std=c99 -O1 -g -fsanitize=address,undefined -I$(CJSON_DIR) \
+	-DCJSON_NESTING_LIMIT=8
 
 LOGIC := ../main/logic/frame_parse.c ../main/logic/line_reader.c \
 	../main/logic/link_state.c ../main/logic/fmt.c ../main/logic/burnin.c
@@ -26,11 +28,11 @@ LOGIC := ../main/logic/frame_parse.c ../main/logic/line_reader.c \
 test: $(BUILD)/test_logic
 	./$(BUILD)/test_logic
 
-$(BUILD)/cJSON.o: $(CJSON_DIR)/cJSON.c
+$(BUILD)/cJSON.o: $(CJSON_DIR)/cJSON.c Makefile
 	mkdir -p $(BUILD)
 	$(CC) $(CJSON_CFLAGS) -c $< -o $@
 
-$(BUILD)/test_logic: test_logic.c $(LOGIC) $(BUILD)/cJSON.o
+$(BUILD)/test_logic: test_logic.c $(LOGIC) $(BUILD)/cJSON.o Makefile
 	mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) test_logic.c $(LOGIC) $(BUILD)/cJSON.o -lm -o $@
 

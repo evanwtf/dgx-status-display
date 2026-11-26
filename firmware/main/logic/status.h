@@ -18,6 +18,9 @@
 #define STATUS_OCC_MAX 48
 #define STATUS_LABEL_MAX 15
 #define STATUS_MAX_TEMPS 24
+/* A real frame nests 3 deep. cJSON recurses once per level (about 96 bytes of
+ * stack each), so deep input is refused before cJSON sees it. */
+#define PROTO_MAX_DEPTH 4
 
 typedef struct {
     char label[STATUS_LABEL_MAX + 1];
@@ -49,6 +52,7 @@ typedef enum {
     FRAME_ERR_NOT_OBJECT,
     FRAME_ERR_VERSION,
     FRAME_ERR_REQUIRED,
+    FRAME_ERR_TOO_DEEP,
 } frame_result_t;
 
 /* Set every reading to unknown. */
@@ -62,3 +66,7 @@ void status_frame_clear(status_frame_t *f);
 frame_result_t frame_parse(const char *line, size_t len, status_frame_t *out);
 
 const char *frame_result_name(frame_result_t r);
+
+/* True when `[`/`{` nesting, counted outside JSON strings, never exceeds
+ * max_depth. It does not check that the JSON is valid. */
+bool json_depth_ok(const char *s, size_t len, int max_depth);

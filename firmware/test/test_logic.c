@@ -185,6 +185,31 @@ static void test_parse_truncates_and_caps(void)
     CHECK_NEAR(f.temps[23].c, 63);
 }
 
+static void test_parse_nesting_depth(void)
+{
+    status_frame_t f;
+    /* A real frame is 3 deep: object, "th" array, one [label, value] pair. */
+    CHECK(parse(REAL, &f) == FRAME_OK);
+    /* Depth 4 is the limit: accepted (the unknown key is ignored). */
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"test-host\",\"x\":[[[1]]]}", &f) == FRAME_OK);
+    /* Depth 5: rejected before cJSON runs. */
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"test-host\",\"x\":[[[[1]]]]}", &f) ==
+          FRAME_ERR_TOO_DEEP);
+    /* 1000 x '[' would overflow the RX task stack inside cJSON. */
+    char deep[1001];
+    memset(deep, '[', 1000);
+    deep[1000] = '\0';
+    CHECK(frame_parse(deep, 1000, &f) == FRAME_ERR_TOO_DEEP);
+    /* Brackets inside strings do not count, escaped quotes included. */
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"[[[[[[{{{{{{\"}", &f) == FRAME_OK);
+    CHECK_STR(f.host, "[[[[[[{{{{{{");
+    CHECK(parse("{\"v\":1,\"t\":5,\"host\":\"a\\\"[[[[[[\"}", &f) == FRAME_OK);
+    /* Unbalanced closers are the parser's problem, not a crash. */
+    CHECK(parse("]]]]", &f) == FRAME_ERR_JSON);
+    CHECK(json_depth_ok("{\"a\":[1]}", 9, 2));
+    CHECK(!json_depth_ok("{\"a\":[1]}", 9, 1));
+}
+
 static void test_line_reader(void)
 {
     line_reader_t r;
@@ -293,26 +318,35 @@ static void test_fmt(void)
 
 static void test_burnin(void)
 {
-    int distinct = 0;
+    /* Walk one full orbit plus one step, so the wrap-around is checked too. */
     shift_t prev = burnin_shift(0);
-    CHECK(prev.dx == 0 && prev.dy == 0);
-    for (int64_t t = 0; t < 40LL * SHIFT_PERIOD_MS; t += SHIFT_PERIOD_MS / 2) {
-        shift_t s = burnin_shift(t);
+    CHECK(prev.dx == 10 && prev.dy == 0);
+    int max_abs = 0;
+    int distinct = 0;
+    for (int64_t k = 1; k <= 17; k++) {
+        shift_t s = burnin_shift(k * SHIFT_PERIOD_MS);
         CHECK(abs(s.dx) <= SHIFT_MAX_PX && abs(s.dy) <= SHIFT_MAX_PX);
-        CHECK(abs(s.dx - prev.dx) <= 4 && abs(s.dy - prev.dy) <= 4);
-        if (s.dx != prev.dx || s.dy != prev.dy) {
-            distinct++;
-        }
+        CHECK(abs(s.dx - prev.dx) <= SHIFT_MAX_STEP_PX);
+        CHECK(abs(s.dy - prev.dy) <= SHIFT_MAX_STEP_PX);
+        max_abs = abs(s.dx) > max_abs ? abs(s.dx) : max_abs;
+        distinct += (s.dx != prev.dx || s.dy != prev.dy);
         prev = s;
     }
-    CHECK(distinct > 10);
+    CHECK(max_abs >= 8);    /* the orbit reaches 8-12 px */
+    CHECK(distinct == 17);  /* every step moves */
+    CHECK(burnin_shift(16LL * SHIFT_PERIOD_MS).dx == 10); /* period: 16 steps */
     /* Inside one period the offset holds still. */
     shift_t a = burnin_shift(SHIFT_PERIOD_MS + 1);
     shift_t b = burnin_shift(2 * SHIFT_PERIOD_MS - 1);
     CHECK(a.dx == b.dx && a.dy == b.dy);
-    CHECK(burnin_brightness(LINK_NO_DATA) < burnin_brightness(LINK_LIVE));
-    CHECK(burnin_brightness(LINK_STALE) == burnin_brightness(LINK_LIVE));
-    CHECK(burnin_brightness(LINK_LIVE) < 255);
+
+    CHECK(burnin_brightness(LINK_LIVE, 0) == BRIGHTNESS_LIVE);
+    CHECK(burnin_brightness(LINK_LIVE, IDLE_DIM_AFTER_MS - 1) == BRIGHTNESS_LIVE);
+    CHECK(burnin_brightness(LINK_LIVE, IDLE_DIM_AFTER_MS) == BRIGHTNESS_IDLE);
+    CHECK(burnin_brightness(LINK_STALE, 0) == BRIGHTNESS_LIVE);
+    CHECK(burnin_brightness(LINK_NO_DATA, 0) == BRIGHTNESS_NO_DATA);
+    CHECK(BRIGHTNESS_NO_DATA < BRIGHTNESS_IDLE && BRIGHTNESS_IDLE < BRIGHTNESS_LIVE);
+    CHECK(BRIGHTNESS_LIVE < 255);
 }
 
 int main(void)
@@ -323,6 +357,7 @@ int main(void)
     test_parse_bad_optional_fields_become_unknown();
     test_parse_size_cap();
     test_parse_truncates_and_caps();
+    test_parse_nesting_depth();
     test_line_reader();
     test_line_reader_cap();
     test_link_state();

@@ -24,3 +24,10 @@ CONFIG_LV_FONT_MONTSERRAT_48=y
 CONFIG_LV_USE_LOG=n
 CONFIG_LV_USE_DEMO_WIDGETS=n
 CONFIG_LV_USE_DEMO_BENCHMARK=n
+
+# Task watchdog: the LVGL task subscribes (ui.c). A hung UI panics and the
+# board reboots, instead of freezing on a stale LIVE screen.
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10

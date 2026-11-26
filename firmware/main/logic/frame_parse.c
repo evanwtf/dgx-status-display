@@ -28,8 +28,39 @@ const char *frame_result_name(frame_result_t r)
     case FRAME_ERR_NOT_OBJECT: return "not an object";
     case FRAME_ERR_VERSION: return "wrong version";
     case FRAME_ERR_REQUIRED: return "missing field";
+    case FRAME_ERR_TOO_DEEP: return "nested too deep";
     }
     return "?";
+}
+
+bool json_depth_ok(const char *s, size_t len, int max_depth)
+{
+    int depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+        } else if (c == '[' || c == '{') {
+            if (++depth > max_depth) {
+                return false;
+            }
+        } else if ((c == ']' || c == '}') && depth > 0) {
+            depth--;
+        }
+    }
+    return true;
 }
 
 /* A finite number inside [lo, hi], or NAN. */
@@ -100,6 +131,9 @@ frame_result_t frame_parse(const char *line, size_t len, status_frame_t *out)
     /* The newline counts toward the 1024-byte cap. */
     if (len + 1 > PROTO_MAX_LINE) {
         return FRAME_ERR_TOO_LONG;
+    }
+    if (!json_depth_ok(line, len, PROTO_MAX_DEPTH)) {
+        return FRAME_ERR_TOO_DEEP;
     }
     cJSON *root = cJSON_ParseWithLength(line, len);
     if (root == NULL) {

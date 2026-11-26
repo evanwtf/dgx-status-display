@@ -2,8 +2,12 @@
  * Receive status frames over USB-Serial-JTAG.
  *
  * The console is on UART0 (sdkconfig.defaults), so ESP-IDF logs never write
- * into this stream. Only this module writes to USB-Serial-JTAG: one hello
- * line at boot, and one when frames resume after NO DATA.
+ * into this stream. Two things still do:
+ *  - the ROM bootloader prints its boot banner on USB-Serial-JTAG at every
+ *    reset, before any of this code runs (the host daemon ignores lines that
+ *    are not JSON);
+ *  - this module writes one hello line at boot, and one when frames resume
+ *    after NO DATA.
  */
 #pragma once
 
@@ -25,3 +29,7 @@ esp_err_t serial_rx_start(void);
 
 /* Copy the current state. Safe from any task. */
 void serial_rx_get(rx_snapshot_t *out);
+
+/* Lowest free stack the RX task has had, in bytes (ESP-IDF FreeRTOS counts
+ * bytes). 0 before the task starts. */
+uint32_t serial_rx_stack_free(void);
