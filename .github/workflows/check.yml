@@ -86,7 +86,7 @@ jobs:
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - run: uv sync --frozen
       # Both steps run in the pinned espressif/idf image (scripts/firmware.py
-      # holds the pin) and give the tree back to the runner user afterwards.
+      # holds the pin), as the runner user, so no root-owned file is left.
       - name: host unit tests (ASan, UBSan)
         run: uv run --frozen python scripts/firmware.py test
       - name: idf.py build

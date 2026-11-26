@@ -8,9 +8,10 @@ The image is pinned by tag and by digest (IDF_IMAGE). It is multi-arch, so the
 same pin builds on this aarch64 DGX and on the x86_64 CI runner. CI calls this
 script too, so the pin lives in one place.
 
-The ESP-IDF image needs root to write under /opt/esp. The container therefore
-runs as root, and its last step gives the firmware tree back to the calling
-user, so no root-owned file stays in the checkout.
+The container runs as the calling user (`-u UID:GID`, `HOME=/tmp`, `--init`),
+so every file it writes in the checkout is owned by that user. The one place
+under /opt/esp the component manager writes, root_managed_components, gets a
+tmpfs owned by that user. Nothing else in the image needs to be writable.
 
 This script never touches a serial port. Flashing is a separate, manual step
 (README).
@@ -43,11 +44,17 @@ COMMANDS = {
 
 def docker_argv(command: str, repo: Path, uid: int, gid: int) -> list[str]:
     """The `docker run` argv for one step. Pure, so tests can check it."""
-    inner = f'{command}; rc=$?; chown -R {uid}:{gid} /project/firmware; exit "$rc"'
     return [
         "docker",
         "run",
         "--rm",
+        "--init",
+        "-u",
+        f"{uid}:{gid}",
+        "-e",
+        "HOME=/tmp",
+        "--tmpfs",
+        f"/opt/esp/root_managed_components:uid={uid},gid={gid},mode=0755",
         "-v",
         f"{repo}:/project",
         "-w",
@@ -55,7 +62,7 @@ def docker_argv(command: str, repo: Path, uid: int, gid: int) -> list[str]:
         IDF_IMAGE,
         "bash",
         "-c",
-        inner,
+        command,
     ]
 
 

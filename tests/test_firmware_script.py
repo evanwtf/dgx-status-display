@@ -12,15 +12,18 @@ def test_image_is_pinned_by_tag_and_digest() -> None:
     assert len(IDF_IMAGE.split("@sha256:")[1]) == 64
 
 
-def test_argv_restores_ownership_and_keeps_the_exit_code() -> None:
-    argv = docker_argv(COMMANDS["build"], Path("/repo"), 1000, 1000)
-    assert argv[:3] == ["docker", "run", "--rm"]
+def test_argv_runs_as_the_calling_user() -> None:
+    argv = docker_argv(COMMANDS["build"], Path("/repo"), 1000, 1001)
+    assert argv[:4] == ["docker", "run", "--rm", "--init"]
+    assert argv[argv.index("-u") + 1] == "1000:1001"
+    assert "HOME=/tmp" in argv
+    tmpfs = argv[argv.index("--tmpfs") + 1]
+    assert tmpfs.startswith("/opt/esp/root_managed_components:")
+    assert "uid=1000,gid=1001" in tmpfs
     assert "/repo:/project" in argv
     assert IDF_IMAGE in argv
-    inner = argv[-1]
-    assert inner.startswith("cd firmware && idf.py build; rc=$?;")
-    assert "chown -R 1000:1000 /project/firmware" in inner
-    assert inner.endswith('exit "$rc"')
+    assert argv[-1] == "cd firmware && idf.py build"
+    assert not any("chown" in a for a in argv)
 
 
 def test_no_step_touches_a_serial_port() -> None:
