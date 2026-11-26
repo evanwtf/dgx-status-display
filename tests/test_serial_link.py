@@ -6,10 +6,11 @@ import logging
 import os
 import select
 import time
+from pathlib import Path
 
 import pytest
 
-from dgx_status.serial_link import SerialLink, open_port
+from dgx_status.serial_link import SerialLink, open_port, resolve_device
 
 
 class FakePort:
@@ -189,3 +190,44 @@ def test_pty_end_to_end() -> None:
     finally:
         os.close(master)
         os.close(slave)
+
+
+def test_resolve_device_plain_path_is_kept(tmp_path: Path) -> None:
+    assert resolve_device(str(tmp_path / "ttyX")) == str(tmp_path / "ttyX")
+
+
+def test_resolve_device_glob_one_match(tmp_path: Path) -> None:
+    (tmp_path / "usb-Espressif_a-if00").touch()
+    (tmp_path / "usb-Other-if00").touch()
+    got = resolve_device(str(tmp_path / "usb-Espressif_*-if00"))
+    assert got == str(tmp_path / "usb-Espressif_a-if00")
+
+
+def test_resolve_device_glob_no_match_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        resolve_device(str(tmp_path / "usb-Espressif_*-if00"))
+
+
+def test_resolve_device_glob_two_matches_refuses(tmp_path: Path) -> None:
+    """Two boards: refuse to guess which one gets the frames."""
+    (tmp_path / "usb-Espressif_a-if00").touch()
+    (tmp_path / "usb-Espressif_b-if00").touch()
+    with pytest.raises(OSError, match="2 devices"):
+        resolve_device(str(tmp_path / "usb-Espressif_*-if00"))
+
+
+def test_link_resolves_the_glob_on_each_open(tmp_path: Path) -> None:
+    """A replug can bring the board back; the glob finds it again."""
+    opened: list[str] = []
+
+    def opener(path: str) -> FakePort:
+        opened.append(path)
+        return FakePort()
+
+    clock = Clock()
+    link = SerialLink(str(tmp_path / "dev-*"), opener=opener, clock=clock)
+    assert not link.send(b"x\n")  # nothing plugged in
+    (tmp_path / "dev-1").touch()
+    clock.now += 2
+    assert link.send(b"x\n")
+    assert opened == [str(tmp_path / "dev-1")]

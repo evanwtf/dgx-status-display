@@ -8,6 +8,7 @@ once (connected, lost, cannot open), not once per frame.
 from __future__ import annotations
 
 import contextlib
+import glob
 import json
 import logging
 from collections.abc import Callable
@@ -20,6 +21,28 @@ logger = logging.getLogger(__name__)
 MIN_BACKOFF_S = 1.0
 MAX_BACKOFF_S = 30.0
 MAX_INCOMING_LINE = 1024
+# The board's USB-Serial-JTAG port, matched by vendor name. The serial number
+# in the real path is the chip's MAC; it is found at run time, never written.
+DEFAULT_DEVICE_GLOB = (
+    "/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*-if00"
+)
+_GLOB_CHARS = frozenset("*?[")
+
+
+def resolve_device(spec: str) -> str:
+    """A plain path is returned as is. A glob must match exactly one path.
+
+    No match raises FileNotFoundError (the board is unplugged). Several
+    matches raise OSError: with two boards, refuse to guess.
+    """
+    if not _GLOB_CHARS & set(spec):
+        return spec
+    matches = sorted(glob.glob(spec))
+    if not matches:
+        raise FileNotFoundError(2, "no device matches", spec)
+    if len(matches) > 1:
+        raise OSError(f"{len(matches)} devices match {spec}; set the device path")
+    return matches[0]
 
 
 class Port(Protocol):
@@ -72,7 +95,7 @@ class SerialLink:
         if now < self._next_try:
             return False
         try:
-            self._port = self._opener(self._path)
+            self._port = self._opener(resolve_device(self._path))
         except (OSError, serial.SerialException) as exc:
             self._backoff = min(MAX_BACKOFF_S, max(MIN_BACKOFF_S, self._backoff * 2))
             self._next_try = now + self._backoff

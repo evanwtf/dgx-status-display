@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from dgx_status import __version__, cli
+from dgx_status.serial_link import DEFAULT_DEVICE_GLOB
 
 
 def test_versions_agree() -> None:
@@ -24,9 +25,16 @@ def test_version_flag(caplog: pytest.LogCaptureFixture) -> None:
     assert __version__ in caplog.text
 
 
-def test_no_device_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_device_is_the_espressif_glob(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(cli.ENV_DEVICE, raising=False)
-    assert cli.main(["--once"]) == 2
+    args = cli._parser().parse_args([])
+    assert args.device == DEFAULT_DEVICE_GLOB
+    assert args.device.startswith("/dev/serial/by-id/usb-Espressif_USB_JTAG")
+
+
+def test_env_device_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(cli.ENV_DEVICE, "/dev/ttyTEST0")
+    assert cli._parser().parse_args([]).device == "/dev/ttyTEST0"
 
 
 def test_bad_interval_is_an_error() -> None:
