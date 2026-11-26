@@ -44,6 +44,7 @@ static float frame_value(const status_frame_t *f, hist_metric_t m)
     case HIST_CIP: return (float)f->cip_bps;
     case HIST_SSD_RD: return (float)f->ssd_rd_bytes_s;
     case HIST_SSD_WR: return (float)f->ssd_wr_bytes_s;
+    case HIST_LLM_KV: return (float)f->llm_kv_pct;
     default: return NAN;
     }
 }
@@ -109,7 +110,8 @@ bool hist_scale(hist_metric_t m, const status_frame_t *f, float *lo, float *hi)
 {
     switch (m) {
     case HIST_GPU_PCT:
-    case HIST_CPU_PCT: *lo = 0; *hi = 100; return true;
+    case HIST_CPU_PCT:
+    case HIST_LLM_KV: *lo = 0; *hi = 100; return true;
     case HIST_GPU_W: *lo = 0; *hi = 240; return true; /* POWER_FULL_SCALE_W */
     case HIST_FAN0:
     case HIST_FAN1: *lo = 0; *hi = 13500; return true; /* FAN_FULL_SCALE_RPM */

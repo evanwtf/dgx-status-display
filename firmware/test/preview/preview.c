@@ -54,13 +54,14 @@ static bool preview_heights(hist_metric_t m, const status_frame_t *f, int height
 #define HALF (W / 2)
 #define SEP 8
 #define SHEET_COLS 4
-#define SHEET_MAX 32
+#define SHEET_MAX 36
 #define SHEET_W (SHEET_COLS * HALF + (SHEET_COLS - 1) * SEP)
 static uint8_t s_sheet[SHEET_W * ((SHEET_MAX / SHEET_COLS) * (HALF + SEP)) * 3];
 static int s_sheet_n;
-/* The README image: four chosen screens, 2 x 2. */
+/* The README image: the six pages, NO DATA and the detail page, 2 x 4. */
 #define README_W (2 * HALF + SEP)
-static uint8_t s_readme[README_W * README_W * 3];
+#define README_H (4 * HALF + 3 * SEP)
+static uint8_t s_readme[README_W * README_H * 3];
 
 /* The same real frame as firmware/test/test_logic.c: `dgx-status --dry-run
  * --once` on a DGX Spark, with the host name replaced. */
@@ -75,7 +76,7 @@ static const char *REAL =
     /* From a 2026-11-26 dry run on the same machine. */
     "\"lan_rx_bps\":127199,\"lan_tx_bps\":471094,\"lan_mbps\":2500,"
     "\"roce_rx_bps\":0,\"roce_tx_bps\":0,\"cip_bps\":0,\"ssd_rd_Bps\":74401,"
-    "\"ssd_wr_Bps\":264537,\"disk_used_gb\":3339,\"disk_size_gb\":4032}";
+    "\"ssd_wr_Bps\":264537,\"disk_used_gb\":3339,\"disk_size_gb\":4032,\"llm_up\":0}";
 
 static uint32_t tick_cb(void)
 {
@@ -388,6 +389,14 @@ int main(int argc, char **argv)
     busy.cip_bps = 18.4e6;
     busy.ssd_rd_bytes_s = 6e9;
     busy.ssd_wr_bytes_s = 940e6;
+    busy.llm_up = 1;
+    snprintf(busy.llm_model, sizeof(busy.llm_model), "MiMo-v2.6-Flash");
+    busy.llm_out_tps = 45;
+    busy.llm_in_tps = 2000;
+    busy.llm_req = 3;
+    busy.llm_kv_pct = 62;
+    busy.llm_ttft_ms = 467;
+    busy.llm_spec_pct = 66.6;
     show(dir, "04-busy-gpu", &busy, LINK_LIVE, 0, on_page(PAGE_GPU));
     add_to_readme(0);
     show(dir, "05-busy-cooling", &busy, LINK_LIVE, 0, on_page(PAGE_COOLING));
@@ -412,17 +421,20 @@ int main(int argc, char **argv)
 
     carousel_t nodata = {.page = PAGE_GPU, .no_data = true};
     show(dir, "11-no-data", &real, LINK_NO_DATA, 133, nodata);
-    add_to_readme(3);
+    add_to_readme(6);
     show(dir, "12-no-data-boot", &missing, LINK_NO_DATA, -1, nodata);
     carousel_t detail = {.page = PAGE_GPU, .detail = true};
     show(dir, "13-detail", &real, LINK_LIVE, 0, detail);
+    add_to_readme(7);
 
     /* Network and storage: idle (the real frame), busy, and missing
      * counters (the first frame after a restart, or a counter reset). */
     show(dir, "22-network-idle", &real, LINK_LIVE, 0, on_page(PAGE_NETWORK));
     show(dir, "23-storage-idle", &real, LINK_LIVE, 0, on_page(PAGE_STORAGE));
     show(dir, "24-network-busy", &busy, LINK_LIVE, 0, on_page(PAGE_NETWORK));
+    add_to_readme(3);
     show(dir, "25-storage-busy", &busy, LINK_LIVE, 0, on_page(PAGE_STORAGE));
+    add_to_readme(4);
     status_frame_t gone = busy;
     gone.roce_rx_bps = NAN;
     gone.roce_tx_bps = NAN;
@@ -430,6 +442,32 @@ int main(int argc, char **argv)
     gone.lan_mbps = NAN;
     show(dir, "26-network-missing", &gone, LINK_LIVE, 0, on_page(PAGE_NETWORK));
     show(dir, "27-storage-missing", &gone, LINK_LIVE, 0, on_page(PAGE_STORAGE));
+
+    /* LLM: busy, the exporter down (dashes), the detail page. Idle hides
+     * the page: the carousel steps from Storage straight to GPU. */
+    show(dir, "28-llm-busy", &busy, LINK_LIVE, 0, on_page(PAGE_LLM));
+    add_to_readme(5);
+    status_frame_t down = busy;
+    down.llm_up = down.llm_out_tps = down.llm_in_tps = down.llm_req = NAN;
+    down.llm_kv_pct = down.llm_spec_pct = down.llm_ttft_ms = NAN;
+    down.llm_model[0] = '\0';
+    show(dir, "29-llm-exporter-down", &down, LINK_LIVE, 0, on_page(PAGE_LLM));
+    carousel_t llm_detail_c = {.page = PAGE_LLM, .detail = true};
+    show(dir, "30-llm-detail", &busy, LINK_LIVE, 0, llm_detail_c);
+    {
+        carousel_t skip;
+        carousel_init(&skip, 0);
+        carousel_tick(&skip, LINK_LIVE, 0);
+        skip.page = PAGE_STORAGE;
+        carousel_set_hidden(&skip, PAGE_LLM, page_hidden(PAGE_LLM, &real), 0);
+        carousel_tick(&skip, LINK_LIVE, CAROUSEL_PAGE_MS);
+        printf("llm idle (llm_up %.0f): Storage steps to %s\n", real.llm_up,
+               page_name(skip.page));
+        if (real.llm_up != 0 || skip.page != PAGE_GPU) {
+            fprintf(stderr, "FAIL the idle LLM page is not skipped\n");
+            s_failed++;
+        }
+    }
 
     /* The 2-minute history style, on the busy frame (and the hot one). */
     synthetic_history(&busy);
@@ -496,7 +534,7 @@ int main(int argc, char **argv)
         printf("wrote %s\n", path);
     }
     snprintf(path, sizeof(path), "%s/pages.png", dir);
-    if (png_write_rgb(path, s_readme, README_W, README_W) != 0) {
+    if (png_write_rgb(path, s_readme, README_W, README_H) != 0) {
         s_failed++;
     } else {
         printf("wrote %s\n", path);

@@ -77,6 +77,6 @@ def test_title_font_covers_every_page_title() -> None:
     titles = re.findall(r'case PAGE_\w+: return "([^"]+)";', tiles)
     assert len(titles) >= 5
     spec = next(f for f in FONTS if f.name == "brl_32")
-    for title in [*titles, "All temperatures"]:
+    for title in [*titles, "All temperatures", "LLM engines"]:
         missing = set(title) - set(spec.symbols)
         assert not missing, f"{title!r} needs {sorted(missing)} in brl_32"

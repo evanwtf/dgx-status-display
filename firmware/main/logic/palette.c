@@ -12,6 +12,10 @@ static const hue_colors_t HUES[HUE_COUNT] = {
     [HUE_HOT] = {0x5E1010, 0x7C1919, 0xA61212, 0xFFD3CC, 0xFF5E4D},
     [HUE_NET] = {0x441436, 0x6B2455, 0x8F2970, 0xECC7E1, 0},
     [HUE_STORE] = {0x142A1A, 0x0F491E, 0x18612B, 0xA1E0B2, 0},
+    /* No 40 deg gap is left on the wheel (the widest, warm to moss, is 62),
+     * so the LLM family is a near-gray slate: HSL saturation 0.10 against
+     * 0.35 or more for every other family. */
+    [HUE_LLM] = {0x24272C, 0x3B3F48, 0x4D535F, 0xCED2D9, 0},
 };
 
 const hue_colors_t *hue_colors(hue_t h)

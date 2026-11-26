@@ -670,7 +670,50 @@ static void test_carousel(void)
     carousel_tick(&c, LINK_LIVE, t5 + CAROUSEL_PAGE_MS - 1);
     CHECK(c.page == PAGE_STORAGE);
     carousel_tick(&c, LINK_LIVE, t5 + CAROUSEL_PAGE_MS);
-    CHECK(c.page == PAGE_GPU); /* wraps after the fifth page */
+    CHECK(c.page == PAGE_LLM);
+    carousel_tick(&c, LINK_LIVE, t5 + 2 * CAROUSEL_PAGE_MS);
+    CHECK(c.page == PAGE_GPU); /* wraps after the sixth page */
+}
+
+static void test_carousel_hidden_pages(void)
+{
+    carousel_t c;
+    carousel_init(&c, 0);
+    carousel_tick(&c, LINK_LIVE, 0);
+    carousel_set_hidden(&c, PAGE_LLM, true, 0);
+    /* Storage steps over the hidden LLM page to GPU. */
+    for (int i = 1; i <= PAGE_STORAGE; i++) {
+        carousel_tick(&c, LINK_LIVE, (int64_t)i * CAROUSEL_PAGE_MS);
+    }
+    CHECK(c.page == PAGE_STORAGE);
+    carousel_tick(&c, LINK_LIVE, (int64_t)(PAGE_STORAGE + 1) * CAROUSEL_PAGE_MS);
+    CHECK(c.page == PAGE_GPU);
+    /* A tap skips it too. */
+    c.page = PAGE_STORAGE;
+    carousel_tap(&c, 100000);
+    CHECK(c.page == PAGE_GPU);
+
+    /* Shown again: the next step from Storage lands on it. */
+    carousel_set_hidden(&c, PAGE_LLM, false, 100000);
+    c.page = PAGE_STORAGE;
+    carousel_tap(&c, 100100);
+    CHECK(c.page == PAGE_LLM && c.page_since_ms == 100100);
+
+    /* Hidden while on screen: move on at once, fresh timer. */
+    carousel_set_hidden(&c, PAGE_LLM, true, 100200);
+    CHECK(c.page == PAGE_GPU && c.page_since_ms == 100200);
+    /* Hiding again, or hiding a page not on screen, changes nothing. */
+    carousel_set_hidden(&c, PAGE_LLM, true, 100300);
+    CHECK(c.page == PAGE_GPU && c.page_since_ms == 100200);
+    /* GPU is never hidden. */
+    carousel_set_hidden(&c, PAGE_GPU, true, 100400);
+    CHECK(c.page == PAGE_GPU && c.hidden == (1u << PAGE_LLM));
+    /* Hidden during detail: the detail stays; the page below has moved. */
+    carousel_set_hidden(&c, PAGE_LLM, false, 100500);
+    c.page = PAGE_LLM;
+    carousel_long_press(&c, 100600);
+    carousel_set_hidden(&c, PAGE_LLM, true, 100700);
+    CHECK(carousel_view(&c) == VIEW_DETAIL && c.page == PAGE_GPU);
 }
 
 static void test_report_hello(void)
@@ -796,7 +839,7 @@ static void check_pair(const char *what, uint32_t fg, uint32_t bg, double min, b
 static void test_contrast(void)
 {
     static const char *const names[HUE_COUNT] = {"teal", "indigo", "violet", "moss", "cool",
-                                                 "warm", "hot",    "net",    "store"};
+                                                 "warm", "hot",    "net",    "store", "llm"};
     for (int h = 0; h < HUE_COUNT; h++) {
         const hue_colors_t *c = hue_colors((hue_t)h);
         /* A value or a label can sit over the base, the fill or the line. */
@@ -894,6 +937,55 @@ static void test_families_stand_apart(void)
     CHECK(hue_gap(hue_colors(HUE_NET)->base, hue_colors(HUE_STORE)->base) > 150);
 }
 
+/* HSL saturation, 0..1. */
+static double sat_hsl(uint32_t rgb)
+{
+    const double r = ((rgb >> 16) & 0xFF) / 255.0, g = ((rgb >> 8) & 0xFF) / 255.0,
+                 b = (rgb & 0xFF) / 255.0;
+    const double mx = fmax(r, fmax(g, b)), mn = fmin(r, fmin(g, b)), l = (mx + mn) / 2;
+    if (mx == mn) {
+        return 0;
+    }
+    return (mx - mn) / (1 - fabs(2 * l - 1));
+}
+
+/* No 40 deg gap is left on the wheel, so the LLM family is set apart by
+ * saturation: a near-gray slate against colored families. */
+static void test_llm_family_stands_apart(void)
+{
+    const hue_colors_t *m = hue_colors(HUE_LLM);
+    CHECK(sat_hsl(m->base) <= 0.15 && sat_hsl(m->fill) <= 0.15 && sat_hsl(m->line) <= 0.15);
+    for (int h = 0; h < HUE_COUNT; h++) {
+        if (h == HUE_LLM) {
+            continue;
+        }
+        const hue_colors_t *o = hue_colors((hue_t)h);
+        CHECK(sat_hsl(o->base) >= 0.33 && sat_hsl(o->fill) >= 0.33 &&
+              sat_hsl(o->line) >= 0.33);
+    }
+}
+
+static void test_fmt_tokens(void)
+{
+    static const struct {
+        double v;
+        const char *value, *unit;
+    } cases[] = {
+        {0, "0", "tok/s"},         {0.04, "0", "tok/s"}, {0.05, "0.1", "tok/s"},   {45.04, "45.0", "tok/s"},
+        {99.94, "99.9", "tok/s"},  {99.95, "100", "tok/s"},  {999.4, "999", "tok/s"},
+        {999.5, "1.0", "k tok/s"}, {2000, "2.0", "k tok/s"}, {99949, "99.9", "k tok/s"},
+        {99950, "100", "k tok/s"}, {999499, "999", "k tok/s"}, {999500, ">999", "k tok/s"},
+        {NAN, "\xE2\x80\x94", ""},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char v[16], u[16];
+        fmt_tokens_rate(cases[i].v, v, sizeof(v), u, sizeof(u));
+        CHECK_STR(v, cases[i].value);
+        CHECK_STR(u, cases[i].unit);
+        CHECK(strlen(v) <= 4 || cases[i].v != cases[i].v);
+    }
+}
+
 typedef struct {
     double v;
     const char *value;
@@ -970,6 +1062,57 @@ static void test_fmt_rates(void)
     CHECK_STR(fmt_tb(b, sizeof(b), 4032, 1), "4.0");
     CHECK_STR(fmt_tb(b, sizeof(b), 128000, 1), "128");
     CHECK_STR(fmt_tb(b, sizeof(b), NAN, 1), FMT_DASH);
+}
+
+static void test_llm_page(void)
+{
+    status_frame_t f;
+    status_frame_clear(&f);
+    tile_t t[TILES_PER_PAGE];
+    /* Exporter unreadable: dashes, and the page still shows. */
+    page_tiles(PAGE_LLM, &f, t);
+    for (int i = 0; i < TILES_PER_PAGE; i++) {
+        CHECK_STR(t[i].value, FMT_DASH);
+        CHECK(t[i].hue == HUE_LLM);
+    }
+    CHECK(!page_hidden(PAGE_LLM, &f));
+    char d[200];
+    CHECK(!llm_detail(d, sizeof(d), &f));
+    /* Idle: hidden. */
+    f.llm_up = 0;
+    CHECK(page_hidden(PAGE_LLM, &f) && !page_hidden(PAGE_GPU, &f));
+    CHECK(!llm_detail(d, sizeof(d), &f));
+    /* Busy. */
+    f.llm_up = 1;
+    f.llm_out_tps = 45;
+    f.llm_in_tps = 2000;
+    f.llm_req = 3;
+    f.llm_kv_pct = 62;
+    snprintf(f.llm_model, sizeof(f.llm_model), "MiMo-v2.6-Flash");
+    CHECK(!page_hidden(PAGE_LLM, &f));
+    page_tiles(PAGE_LLM, &f, t);
+    CHECK_STR(t[0].label, "Output");
+    CHECK_STR(t[0].value, "45.0");
+    CHECK_STR(t[0].unit, "tok/s");
+    CHECK_STR(t[1].label, "Prompt");
+    CHECK_STR(t[1].value, "2.0");
+    CHECK_STR(t[1].unit, "k tok/s");
+    CHECK_STR(t[2].label, "Requests");
+    CHECK_STR(t[2].value, "3");
+    CHECK_STR(t[3].label, "KV cache");
+    CHECK_STR(t[3].value, "62");
+    CHECK(fabsf(t[3].fill - 0.62f) < 1e-6f && t[3].hist == HIST_LLM_KV);
+    /* Engine up, no requests: real zeros. */
+    f.llm_out_tps = f.llm_in_tps = f.llm_req = 0;
+    page_tiles(PAGE_LLM, &f, t);
+    CHECK_STR(t[0].value, "0");
+    CHECK_STR(t[2].value, "0");
+    CHECK(llm_detail(d, sizeof(d), &f));
+    CHECK_STR(d, "MiMo-v2.6-Flash\nFirst token  \xE2\x80\x94\nDraft accepted  \xE2\x80\x94");
+    f.llm_ttft_ms = 467.4;
+    f.llm_spec_pct = 66.6;
+    llm_detail(d, sizeof(d), &f);
+    CHECK_STR(d, "MiMo-v2.6-Flash\nFirst token  467 ms\nDraft accepted  67 %");
 }
 
 static void test_network_and_storage_pages(void)
@@ -1101,7 +1244,7 @@ static void test_history_ring(void)
     for (int i = 0; i < HIST_LEN - 1; i++) {
         CHECK(hist_at(&h, HIST_GPU_PCT, i) == HIST_GAP);
     }
-    CHECK(sizeof(h.s) == 3840); /* 16 metrics x 120 x int16 */
+    CHECK(sizeof(h.s) == 4080); /* 17 metrics x 120 x int16 */
 }
 
 static void test_history_heights(void)
@@ -1450,13 +1593,17 @@ int main(void)
     test_page_tiles_real_frame();
     test_page_tiles_busy_and_missing();
     test_carousel();
+    test_carousel_hidden_pages();
     test_report_hello();
     test_tile_colors_and_levels();
     test_contrast();
     test_moss_stands_apart();
     test_families_stand_apart();
     test_fmt_rates();
+    test_fmt_tokens();
+    test_llm_family_stands_apart();
     test_network_and_storage_pages();
+    test_llm_page();
     test_history_rates();
     test_history_ring();
     test_history_heights();

@@ -5,6 +5,11 @@
 New firmware needs the daemon from this version. With an older daemon,
 the Network and Storage pages show dashes.
 
+- LLM page: Output and Prompt tok/s, Requests running and KV cache %, from
+  the local LLM metrics exporter, in a slate family. The carousel skips it
+  while no engine is up; an exporter the daemon cannot read shows dashes.
+  The detail page opened from it lists the models, the time to first token
+  and the draft-token acceptance.
 - Network and Storage pages: LAN in/out against the link speed, RoCE in/out
   and Cluster IP against the ConnectX-7's 200 Gb/s, SSD read/write against
   14 GB/s, and disk use in TB. Each rate is a counter delta between two

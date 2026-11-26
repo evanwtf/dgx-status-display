@@ -48,6 +48,7 @@ const char *page_name(page_id_t p)
     case PAGE_HOST: return "Host";
     case PAGE_NETWORK: return "Network";
     case PAGE_STORAGE: return "Storage";
+    case PAGE_LLM: return "LLM";
     }
     return "?";
 }
@@ -190,6 +191,41 @@ void fmt_bytes_rate(double bytes_s, char *value, size_t vcap, char *unit, size_t
     static const uint64_t DIVS[] = {1000000ULL, 1000000000ULL};
     static const char *const UNITS[] = {"MB/s", "GB/s"};
     fmt_rate(bytes_s, DIVS, UNITS, 2, value, vcap, unit, ucap);
+}
+
+bool page_hidden(page_id_t p, const status_frame_t *f)
+{
+    return p == PAGE_LLM && f->llm_up == 0;
+}
+
+bool llm_detail(char *buf, size_t cap, const status_frame_t *f)
+{
+    if (!(f->llm_up > 0)) {
+        return false;
+    }
+    char ttft[24], spec[24];
+    if (isfinite(f->llm_ttft_ms)) {
+        snprintf(ttft, sizeof(ttft), "%ld ms", (long)lround(f->llm_ttft_ms));
+    } else {
+        snprintf(ttft, sizeof(ttft), "%s", FMT_DASH);
+    }
+    if (isfinite(f->llm_spec_pct)) {
+        snprintf(spec, sizeof(spec), "%ld %%", (long)lround(f->llm_spec_pct));
+    } else {
+        snprintf(spec, sizeof(spec), "%s", FMT_DASH);
+    }
+    snprintf(buf, cap, "%s\nFirst token  %s\nDraft accepted  %s",
+             f->llm_model[0] ? f->llm_model : FMT_DASH, ttft, spec);
+    return true;
+}
+
+void fmt_tokens_rate(double tps, char *value, size_t vcap, char *unit, size_t ucap)
+{
+    /* Counted in tenths of a token, so the 0.1 place survives the integer
+     * math below 100 tok/s. */
+    static const uint64_t DIVS[] = {10ULL, 10000ULL};
+    static const char *const UNITS[] = {"tok/s", "k tok/s"};
+    fmt_rate(isfinite(tps) ? tps * 10.0 : tps, DIVS, UNITS, 2, value, vcap, unit, ucap);
 }
 
 char *fmt_tb(char *buf, size_t cap, double gb, int max_decimals)
@@ -401,6 +437,25 @@ void page_tiles(page_id_t p, const status_frame_t *f, tile_t out[TILES_PER_PAGE]
         d->hist = HIST_NONE; /* it moves too slowly for a 2-minute chart */
         rate_tile(&out[3], "Cluster IP", f->cip_bps, true, HUE_NET, NIC_FULL_SCALE_BPS,
                   HIST_CIP);
+        break;
+    }
+    case PAGE_LLM: {
+        const char *labels[2] = {"Output", "Prompt"};
+        const double tps[2] = {f->llm_out_tps, f->llm_in_tps};
+        for (int i = 0; i < 2; i++) {
+            out[i].label = labels[i];
+            fmt_tokens_rate(tps[i], out[i].value, sizeof(out[i].value), out[i].unit,
+                            sizeof(out[i].unit));
+            out[i].tier = TIER_L;
+            out[i].hue = HUE_LLM;
+            out[i].fill = -1.0f; /* no natural full scale for tokens/s */
+            out[i].hist = HIST_NONE;
+        }
+        num(&out[2], "Requests", (float)f->llm_req, 0, TIER_XL, "running", METRIC_NONE);
+        out[2].hue = HUE_LLM;
+        num(&out[3], "KV cache", (float)f->llm_kv_pct, 0, TIER_XL, "%", METRIC_NONE);
+        with_level(&out[3], HUE_LLM, (float)f->llm_kv_pct, 100.0f);
+        out[3].hist = HIST_LLM_KV;
         break;
     }
     }

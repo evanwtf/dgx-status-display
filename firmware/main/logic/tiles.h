@@ -1,7 +1,8 @@
 /*
  * The carousel pages as data. Pure C.
  *
- * Five pages of four tiles. Each tile has a label, one big value and a
+ * Six pages of four tiles. The LLM page shows only while an engine is up
+ * (carousel.h). Each tile has a label, one big value and a
  * unit. The view draws a tile; this module decides what goes in it.
  *
  * Numbers must not move as they tick:
@@ -21,7 +22,7 @@
 #include "palette.h"
 #include "status.h"
 
-#define PAGE_COUNT 5
+#define PAGE_COUNT 6
 #define TILES_PER_PAGE 4
 #define TILE_VALUE_MAX (STATUS_OCC_MAX + 1)
 #define TILE_UNIT_MAX 24
@@ -44,6 +45,7 @@ typedef enum {
     PAGE_HOST,
     PAGE_NETWORK,
     PAGE_STORAGE,
+    PAGE_LLM,
 } page_id_t;
 
 /* Font tiers. Each holds a fixed number of monospace characters. */
@@ -114,3 +116,13 @@ void fmt_bytes_rate(double bytes_s, char *value, size_t vcap, char *unit, size_t
  * "12.5", 128000 -> "128"; ">999" past that. `max_decimals` caps the
  * places (the size in the unit slot uses 1: "4.0"). */
 char *fmt_tb(char *buf, size_t cap, double gb, int max_decimals);
+/* Tokens per second, the same rules: "45.0", "940", then "2.0" with the
+ * unit "k tok/s". */
+/* True when page p has nothing to show: the LLM page while the exporter
+ * reports no engine up (llm_up 0). An unreadable exporter (llm_up unknown)
+ * keeps the page, so its dashes show the fault. */
+bool page_hidden(page_id_t p, const status_frame_t *f);
+/* The detail page's LLM text: models, then TTFT and speculative
+ * acceptance when known. Returns false when no engine is up. */
+bool llm_detail(char *buf, size_t cap, const status_frame_t *f);
+void fmt_tokens_rate(double tps, char *value, size_t vcap, char *unit, size_t ucap);

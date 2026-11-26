@@ -185,6 +185,7 @@ static void tick(lv_timer_t *t)
     }
     serial_rx_get(&s_rx);
     link_state_t st = link_state(&s_rx.link, now);
+    carousel_set_hidden(&s_carousel, PAGE_LLM, page_hidden(PAGE_LLM, &s_rx.frame), now);
     carousel_tick(&s_carousel, st, now);
 
     shift_t sh = burnin_shift(now);

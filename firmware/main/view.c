@@ -66,7 +66,7 @@ static int s_last_page = -1;
 static bool s_animate = true;
 /* Detail */
 static lv_obj_t *s_d_clock, *s_d_col[2], *s_d_footer;
-static lv_obj_t *s_d_chart_value;
+static lv_obj_t *s_d_chart_value, *s_d_title;
 /* NO DATA */
 static lv_obj_t *s_n_age, *s_n_hint;
 
@@ -327,9 +327,7 @@ static void build_detail(void)
 {
     s_detail = box(s_root, 0, 0, W, W);
     const int x = 28, inner = W - 2 * 28;
-    lv_obj_t *title =
-        label(s_detail, &brl_32, COLOR_TITLE, x, 20, inner - 90, LV_TEXT_ALIGN_LEFT);
-    lv_label_set_text(title, "All temperatures");
+    s_d_title = label(s_detail, &brl_32, COLOR_TITLE, x, 20, inner - 90, LV_TEXT_ALIGN_LEFT);
     s_d_clock = label(s_detail, &brl_30, COLOR_CLOCK, W - x - 90, 22, 90, LV_TEXT_ALIGN_RIGHT);
     for (int i = 0; i < 2; i++) {
         s_d_col[i] = label(s_detail, &brl_30, COLOR_TEXT, x + i * (inner / 2), 76,
@@ -513,19 +511,35 @@ static void render_detail(const view_model_t *m)
     const status_frame_t *f = m->frame;
     char a[32], col[2][STATUS_MAX_TEMPS / 2 * 32 + 1], line[200];
     set_text(s_d_clock, m->clock);
-    const int per_col = (f->n_temps + 1) / 2;
-    for (int c = 0; c < 2; c++) {
-        size_t n = 0;
-        col[c][0] = '\0';
-        for (int i = c * per_col; i < f->n_temps && i < (c + 1) * per_col; i++) {
-            int w = snprintf(col[c] + n, sizeof(col[c]) - n, "%s%-8s %s", n ? "\n" : "",
-                             f->temps[i].label, fmt_temp1(a, sizeof(a), f->temps[i].c));
-            if (w < 0 || (size_t)w >= sizeof(col[c]) - n) {
-                break;
+    const int inner = W - 2 * 28;
+    /* Opened from the LLM page with an engine up: the engines, not the
+     * temperatures. */
+    if (m->page == PAGE_LLM && llm_detail(line, sizeof(line), f)) {
+        set_text(s_d_title, "LLM engines");
+        lv_obj_set_width(s_d_col[0], inner);
+        lv_label_set_long_mode(s_d_col[0], LV_LABEL_LONG_MODE_WRAP);
+        set_text(s_d_col[0], line);
+        set_text(s_d_col[1], "");
+        lv_obj_set_hidden(s_d_col[1], true);
+    } else {
+        set_text(s_d_title, "All temperatures");
+        lv_obj_set_width(s_d_col[0], inner / 2 - 8);
+        lv_obj_set_hidden(s_d_col[1], false);
+        lv_label_set_long_mode(s_d_col[0], LV_LABEL_LONG_MODE_CLIP);
+        const int per_col = (f->n_temps + 1) / 2;
+        for (int c = 0; c < 2; c++) {
+            size_t n = 0;
+            col[c][0] = '\0';
+            for (int i = c * per_col; i < f->n_temps && i < (c + 1) * per_col; i++) {
+                int w = snprintf(col[c] + n, sizeof(col[c]) - n, "%s%-8s %s", n ? "\n" : "",
+                                 f->temps[i].label, fmt_temp1(a, sizeof(a), f->temps[i].c));
+                if (w < 0 || (size_t)w >= sizeof(col[c]) - n) {
+                    break;
+                }
+                n += (size_t)w;
             }
-            n += (size_t)w;
+            set_text(s_d_col[c], f->n_temps ? col[c] : (c == 0 ? FMT_DASH : ""));
         }
-        set_text(s_d_col[c], f->n_temps ? col[c] : (c == 0 ? FMT_DASH : ""));
     }
     snprintf(line, sizeof(line),
              "%s, fw %s\nFrames %lu, rejected %lu\nStack free: rx %lu B, ui %lu B", f->host,

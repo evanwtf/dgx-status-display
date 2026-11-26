@@ -9,7 +9,7 @@
  * instantaneous samples.
  *
  * Samples are int16 in metric units x a per-metric scale (history.c), so
- * 16 metrics x 120 samples take 3840 bytes.
+ * 17 metrics x 120 samples take 4080 bytes.
  */
 #pragma once
 
@@ -42,6 +42,7 @@ typedef enum {
     HIST_CIP,
     HIST_SSD_RD,
     HIST_SSD_WR,
+    HIST_LLM_KV,
     HIST_METRICS,
 } hist_metric_t;
 

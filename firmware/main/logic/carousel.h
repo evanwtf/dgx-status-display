@@ -8,6 +8,9 @@
  *  - LINK_NO_DATA stops everything and shows the NO DATA screen. When frames
  *    come back, the carousel resumes on the page it left, with a fresh timer.
  *    STALE keeps cycling.
+ *  - A hidden page is skipped. The LLM page hides while no engine is up.
+ *    When the page on screen becomes hidden, the carousel moves on at once,
+ *    with a fresh timer. Page GPU is never hidden.
  */
 #pragma once
 
@@ -28,6 +31,7 @@ typedef struct {
     bool no_data;
     int64_t page_since_ms;
     int64_t detail_since_ms;
+    uint32_t hidden; /* bit p set: page p is skipped */
 } carousel_t;
 
 void carousel_init(carousel_t *c, int64_t now_ms);
@@ -36,3 +40,5 @@ void carousel_tick(carousel_t *c, link_state_t st, int64_t now_ms);
 void carousel_tap(carousel_t *c, int64_t now_ms);
 void carousel_long_press(carousel_t *c, int64_t now_ms);
 view_kind_t carousel_view(const carousel_t *c);
+/* Hide or show page p. Hiding the page on screen moves on now. */
+void carousel_set_hidden(carousel_t *c, page_id_t p, bool hidden, int64_t now_ms);

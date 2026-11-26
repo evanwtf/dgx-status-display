@@ -266,8 +266,9 @@ sudo systemctl disable --now dgx-status   # the factory app does not read frames
 
 ## What the screen shows
 
-The panel is about 40 mm across, so every value is big. Five pages of four
-colored tiles cycle every 10 seconds. Each tile has a label, one value and a
+The panel is about 40 mm across, so every value is big. Six pages of four
+colored tiles cycle every 10 seconds. The LLM page shows only while an LLM
+engine is up. Each tile has a label, one value and a
 unit.
 
 | Page | Tiles |
@@ -277,8 +278,9 @@ unit.
 | Host | CPU %, Memory used (`/ 128 GiB`, the memory installed, as the unit), Load avg, Up |
 | Network | LAN in, LAN out (against the link speed), RoCE in, RoCE out (against 200 Gb/s), in kb/s, Mb/s or Gb/s |
 | Storage | SSD read, SSD write (against 14 GB/s), in MB/s or GB/s; Disk used in TB (`/ 4.0 TB` as the unit); Cluster IP (kernel IP traffic on the ConnectX-7, in + out) |
+| LLM | Output and Prompt in tok/s or k tok/s, Requests running, KV cache % (with a fill), summed over the engines that are up. Read from the local LLM metrics exporter. Long-press on this page for the models, the time to first token and the draft-token acceptance. |
 
-![The three pages and the NO DATA screen](docs/img/pages.png)
+![The six pages, the NO DATA screen and the detail page](docs/img/pages.png)
 
 - **Color carries the reading.** Usage, Power, the fans, CPU and Memory fill
   from the bottom to the value's fraction (Power against 240 W), and the

@@ -20,6 +20,7 @@ typedef enum {
     HUE_HOT,      /* at or above red */
     HUE_NET,      /* network: LAN, RoCE, cluster IP; rose, 318 deg */
     HUE_STORE,    /* storage: SSD and disk; green, 136 deg, between moss and teal */
+    HUE_LLM,      /* LLM engines: slate, set apart by low saturation, not hue */
     HUE_COUNT,
 } hue_t;
 
