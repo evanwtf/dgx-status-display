@@ -1,7 +1,7 @@
 """Shared fixtures.
 
-`tests/fixtures/spark/` holds files copied read-only from the DGX Spark
-(`a DGX Spark`, GB10) on 2026-11-25: /proc files, the thermal zones and the
+`tests/fixtures/spark/` holds files copied read-only from a DGX Spark (GB10)
+on 2026-11-25: /proc files, the thermal zones and the
 hwmon tree, with the nvfanread fans. `scripts/capture_fixtures.py` makes a
 fresh copy.
 """

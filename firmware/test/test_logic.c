@@ -44,7 +44,8 @@ static frame_result_t parse(const char *s, status_frame_t *f)
     return frame_parse(s, strlen(s), f);
 }
 
-/* The real frame from `dgx-status --dry-run --once` on the DGX, 2026-11-25. */
+/* A real frame from `dgx-status --dry-run --once` on a DGX Spark, 2026-11-25,
+ * with the host name replaced. */
 static const char *REAL =
     "{\"v\":1,\"t\":1795664697,\"tz_s\":-18000,\"host\":\"test-host\",\"up_s\":1214815,"
     "\"load1\":0.35,\"load5\":0.48,\"load15\":0.36,\"cpu_pct\":0.3,"

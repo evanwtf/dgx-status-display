@@ -80,7 +80,9 @@ def test_missing_readings_are_omitted() -> None:
 
 
 def test_nan_and_inf_are_omitted() -> None:
-    s = Snapshot(t=1, host="test-host", cpu_pct=math.nan, gpu_w=math.inf, board_c=-math.inf)
+    s = Snapshot(
+        t=1, host="test-host", cpu_pct=math.nan, gpu_w=math.inf, board_c=-math.inf
+    )
     f = _decode(encode_frame(s))
     assert "cpu_pct" not in f
     assert "gpu_w" not in f
