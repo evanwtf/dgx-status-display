@@ -1,33 +1,38 @@
 # Changelog
 
-## Unreleased
+## 0.0.4 (2026-11-27)
 
-- README: the far-mode section shows the eight far pages, rendered by the
-  preview. `make readme-images` refreshes them and the near-mode image;
-  `scripts/readme_images.py` (was `readme_image.py`) recompresses them.
+Far mode: one metric per page, in text large enough to read from 2 m.
+The board starts in far mode; a short press of BOOT switches to the tiles.
+
+Upgrade: if you build from source, delete `firmware/sdkconfig` before you
+build. A sdkconfig from an older build keeps the old LVGL settings, and
+far mode then draws no text; the build now stops with "stale
+firmware/sdkconfig" instead. To keep the stored settings, flash the zip's
+parts with `@flash_args`; `flash-merged` erases them, the display mode
+included.
+
 - Far mode, the new default: one metric per page (GPU, GPU PWR, GPU TEMP,
   LLM, MODEL, MEMORY, CPU), sized from an eye chart read on the board at
-  2 m. GPU PWR, GPU TEMP and MEMORY are too wide for 100 px capitals and
-  use 81 px.
-  Words have 100 px capitals, values 141 px digits (109 px for 4 or more
+  2 m. Words have 100 px capitals (81 px for GPU PWR, GPU TEMP and MEMORY,
+  which are too wide), values 141 px digits (109 px for 4 or more
   characters), units 81 px capitals, and names 100 px capitals when they
-  fit, else 81 px. The metric's level fill,
-  or its 2-minute history, spans the screen. A short press of BOOT switches
-  between far and near mode, with a fade, and NVS keeps the choice. Near
-  mode is unchanged. The board logs `mode far` or `mode near`.
-- Upgrade: delete `firmware/sdkconfig` before you build. A sdkconfig from
-  an older build keeps the old LVGL settings, and far mode then draws no
-  text; the build now stops with "stale firmware/sdkconfig" instead.
-- `flash-merged` also resets the display mode to far.
-- Firmware: a failed LVGL allocation traps (core dump, reboot) instead of
-  drawing a blank glyph. The minute `free:` line reports the LVGL heap
-  peak.
+  fit, else 81 px. The metric's level fill, or its 2-minute history, spans
+  the screen. LLM and MODEL show only while something runs.
+- BOOT: a short press switches between far and near mode, with a fade, and
+  NVS keeps the choice. Near mode (the 2×2 tiles) is unchanged. The board
+  logs `mode far` or `mode near`.
 - Firmware: the LVGL heap is 96 KB (was 48 KB). A glyph of the 141 px
   digits needs a 16 KB buffer on it while it draws. The far-mode fonts are
   RLE-compressed (`LV_USE_FONT_COMPRESSED`).
+- Firmware: a failed LVGL allocation traps (core dump, reboot) instead of
+  drawing a blank glyph. The minute `free:` line reports the LVGL heap
+  peak. A page redraws only what changed.
 - Daemon: a vLLM engine on the GPU shows as `vllm`. vLLM renames its
   processes (`VLLM::EngineCore`, `VLLM::Worker_TP0`), so the Running tile
   showed the cut process title.
+- README: the far-mode section shows the eight far pages, rendered by the
+  preview. `make readme-images` refreshes them and the near-mode image.
 
 ## 0.0.3 (2026-11-26)
 
