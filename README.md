@@ -403,9 +403,42 @@ cd "$REPO/backup" && sha256sum -c factory-16MB.bin.sha256 && cd "$REPO" \
 
 ## What the screen shows
 
-The panel is about 40 mm across, so every value is big. Six pages of four
-colored tiles cycle every 10 seconds, with a 0.3 s fade through black
-between pages. Each tile has a label, one value and a unit.
+The panel is about 40 mm across. It has two modes, and a short press of
+**BOOT** switches between them:
+
+- **Far** (the default): one metric per page, sized to read from 2 m.
+- **Near**: six pages of four colored tiles.
+
+Both cycle every 10 seconds, with a 0.3 s fade through black between pages.
+
+### Far mode
+
+Each page shows one word, one value and its unit, over the metric's level
+fill across the whole screen. Sizes come from an eye chart read on the
+board at 2 m: words have 100 px capitals (81 px when a word is too wide),
+values have 141 px digits (109 px for 4 or more characters), and units and
+names have 81 px capitals. All text is upper case, so no letter is smaller.
+There is no clock and no page dot: neither is readable from 2 m.
+
+| Page | Shows |
+| --- | --- |
+| GPU | Usage %, fill to 100 % |
+| POWER | GPU power in W, fill to 240 W |
+| TEMP | GPU °C, blue, then amber from 80 °C, red from 90 °C; fill from 20 to 100 °C |
+| LLM | Output tok/s or k tok/s, no fill. Only while an engine is up. |
+| MODEL | The models of the engines that are up, without the `org/` part. With no engine up, RUNNING and the GPU's backend (`vllm`, `llama.cpp`). Hidden when the GPU is idle and no engine is up. A long name takes two lines and ends in `...` if it still does not fit. |
+| MEMORY | GiB used, `/ 128 GIB` as the unit, fill to the total |
+| CPU | CPU %, fill to 100 % |
+
+A missing reading is `—`. While the link is STALE, the value turns amber
+and the fill goes away. With **2-minute history** chosen (detail page), the
+fill becomes the metric's chart across the screen. NO DATA has an 81 px
+heading.
+
+### Near mode
+
+Six pages of four colored tiles. Each tile has a label, one value and a
+unit.
 
 The LLM page shows only while the daemon reads at least one engine up from
 the LLM metrics exporter. The exporter must listen on loopback (the daemon
@@ -444,9 +477,11 @@ answer for 15 s, the page hides.
 - **Touch:** a tap moves to the next page and restarts the 10-second timer.
   A long press opens every temperature sensor; a tap or 20 seconds goes back.
 - **Buttons:** a short press of **KEY** (released within 1 s) turns the screen 90° clockwise, so the board can stand on any
-  edge. The angle survives a reboot (NVS), and touch follows it. BOOT and PWR
-  have no action; the board logs every press. Holding PWR does not switch
-  the board off: unplug it.
+  edge. The angle survives a reboot (NVS), and touch follows it. A short
+  press of **BOOT** switches between far and near mode, with a fade; the
+  mode survives a reboot (NVS), and a board with no stored mode starts in
+  far mode. PWR has no action; the board logs every press. Holding PWR does
+  not switch the board off: unplug it.
 - **NO DATA** (no frame for over 10 s): the carousel stops; a black, dimmed
   screen says "No data from the DGX" and how long ago the last frame came.
 - **Type:** values in JetBrains Mono, right-aligned against a fixed edge with

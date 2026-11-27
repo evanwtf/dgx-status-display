@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Far mode, the new default: one metric per page (GPU, POWER, TEMP, LLM,
+  MODEL, MEMORY, CPU), sized from an eye chart read on the board at 2 m.
+  Words have 100 px capitals, values 141 px digits (109 px for 4 or more
+  characters), and units and names 81 px capitals. The metric's level fill,
+  or its 2-minute history, spans the screen. A short press of BOOT switches
+  between far and near mode, with a fade, and NVS keeps the choice. Near
+  mode is unchanged. The board logs `mode far` or `mode near`.
+- Firmware: the LVGL heap is 96 KB (was 48 KB). A glyph of the 141 px
+  digits needs a 16 KB buffer on it while it draws. The far-mode fonts are
+  RLE-compressed (`LV_USE_FONT_COMPRESSED`).
 - Daemon: a vLLM engine on the GPU shows as `vllm`. vLLM renames its
   processes (`VLLM::EngineCore`, `VLLM::Worker_TP0`), so the Running tile
   showed the cut process title.
