@@ -18,6 +18,7 @@
 #include "logic/burnin.h"
 #include "logic/carousel.h"
 #include "logic/co5300.h"
+#include "logic/far.h"
 #include "logic/link_state.h"
 #include "logic/tiles.h"
 #include "logic/transition.h"
@@ -51,6 +52,10 @@ static rx_snapshot_t s_rx;
 static view_model_t s_model;
 static chart_style_t s_style = CHART_LEVEL;
 static turn_t s_turn = TURN_0;
+/* The mode BOOT asked for, and the mode on the panel: it changes at the
+ * dark moment of the fade, like a rotation. */
+static view_mode_t s_mode = MODE_FAR;
+static view_mode_t s_mode_shown = MODE_FAR;
 /* Render time of one LVGL refresh: the slowest since the last log line. */
 static int64_t s_refr_start_us;
 static uint32_t s_refr_max_ms;
@@ -88,6 +93,24 @@ static void on_key_short(void)
     s_last_change_ms = now_ms();
     transition_step(now_ms());
     ESP_LOGI(TAG, "rotation: %d deg", turn_degrees(s_turn));
+}
+
+static int page_count(view_mode_t m)
+{
+    return m == MODE_FAR ? FAR_PAGE_COUNT : PAGE_COUNT;
+}
+
+/* BOOT, short press: switch between near and far, and store it. The
+ * carousel starts the new mode on its first page; the panel fades through
+ * black to it. Runs in the LVGL task (the buttons timer). */
+static void on_boot_short(void)
+{
+    s_mode = settings_toggle_mode(settings_nvs_mode_store(), s_mode);
+    carousel_set_page_count(&s_carousel, page_count(s_mode), now_ms());
+    transition_turn(&s_tr); /* the switch waits for the dark moment */
+    s_last_change_ms = now_ms();
+    transition_step(now_ms());
+    ESP_LOGI(TAG, "mode %s", view_mode_name(s_mode));
 }
 
 static void on_tap(void)
@@ -222,6 +245,7 @@ static void transition_step(int64_t now)
     const tr_out_t o = transition_tick(&s_tr, &s_carousel, target, now);
     set_brightness(o.level);
     if (o.swap) {
+        s_mode_shown = s_mode;
         apply_turn();
         apply_shift(now);
         render(now);
@@ -267,7 +291,14 @@ static void tick(lv_timer_t *t)
     serial_rx_get(&s_rx);
     link_state_t st = link_state(&s_rx.link, now);
     s_link = st;
-    carousel_set_hidden(&s_carousel, PAGE_LLM, page_hidden(PAGE_LLM, &s_rx.frame), now);
+    if (s_mode == MODE_FAR) {
+        for (int p = 0; p < FAR_PAGE_COUNT; p++) {
+            carousel_set_hidden(&s_carousel, (page_id_t)p,
+                                far_hidden((far_page_t)p, &s_rx.frame), now);
+        }
+    } else {
+        carousel_set_hidden(&s_carousel, PAGE_LLM, page_hidden(PAGE_LLM, &s_rx.frame), now);
+    }
     carousel_tick(&s_carousel, st, now);
 
     /* A burn-in step that falls due during a fade waits for the dark
@@ -293,7 +324,8 @@ static void tick(lv_timer_t *t)
 static void render(int64_t now)
 {
     const carousel_t shown = transition_shown(&s_tr, &s_carousel);
-    view_model_fill(&s_model, &s_rx.frame, s_link, link_age_s(&s_rx.link, now), &shown);
+    view_model_fill(&s_model, &s_rx.frame, s_link, link_age_s(&s_rx.link, now), &shown,
+                    s_mode_shown);
     s_model.style = s_style;
     s_model.hist_heights = serial_rx_hist_heights;
     s_model.accepted = s_rx.accepted;
@@ -314,6 +346,10 @@ void ui_init(void)
     s_turn = settings_turn(settings_nvs_turn_store());
     apply_turn();
     ESP_LOGI(TAG, "rotation: %d deg (stored)", turn_degrees(s_turn));
+    s_mode = settings_mode(settings_nvs_mode_store()); /* far when none is stored */
+    s_mode_shown = s_mode;
+    carousel_set_page_count(&s_carousel, page_count(s_mode), now);
+    ESP_LOGI(TAG, "mode %s (stored)", view_mode_name(s_mode));
     view_init(lv_screen_active(), on_tap, on_long_press, on_chart_toggle);
     lv_display_add_event_cb(lv_display_get_default(), on_refresh_ready, LV_EVENT_REFR_READY,
                             NULL);
@@ -323,5 +359,5 @@ void ui_init(void)
     lv_timer_create(tick, UI_PERIOD_MS, NULL);
     s_fade_timer = lv_timer_create(fade_tick, FADE_STEP_MS, NULL);
     lv_timer_pause(s_fade_timer);
-    buttons_start(on_key_short);
+    buttons_start(on_key_short, on_boot_short);
 }

@@ -69,7 +69,17 @@ static lv_obj_t *s_d_clock, *s_d_col[2], *s_d_footer;
 static lv_obj_t *s_d_chart_value, *s_d_title;
 static bool s_d_llm_mode = true; /* true forces the first layout to temperatures */
 /* NO DATA */
-static lv_obj_t *s_n_age, *s_n_hint;
+static lv_obj_t *s_n_head, *s_n_age, *s_n_hint;
+static int s_n_far = -1; /* the NO DATA heading's mode; -1 before the first */
+/* Far mode */
+static lv_obj_t *s_far;
+static lv_obj_t *s_f_bg, *s_f_fill, *s_f_chart;
+static lv_obj_t *s_f_word, *s_f_value, *s_f_unit, *s_f_name[2];
+static int s_f_hue = -1;
+static int s_f_fill_px = -1;
+static int s_f_last_page = -1;
+static int16_t s_f_cols[HIST_LEN];
+static uint32_t s_f_chart_fill, s_f_chart_line;
 
 static view_cb_t s_on_tap, s_on_long_press, s_on_chart_toggle;
 
@@ -356,13 +366,168 @@ static void build_detail(void)
     lv_label_set_long_mode(s_d_footer, LV_LABEL_LONG_MODE_WRAP);
 }
 
+
+/*
+ * Far mode: one metric per page, read from 2 m (logic/far.h). A rounded
+ * square of the metric's hue fills the screen, concentric with the panel
+ * corner like the tiles' outer corners; the level fill or the history chart
+ * rises from its bottom; the word, the value and the unit sit on top. No
+ * strip: the clock and the page dots are too small to read from there.
+ */
+#define FAR_M MARGIN                   /* 14 */
+#define FAR_S (W - 2 * FAR_M)          /* 452 */
+#define FAR_TEXT_W (FAR_S - 2 * 8)     /* 436: words and names */
+#define FAR_VALUE_W (FAR_S - 2 * 4)    /* 444: a value with its unit beside it */
+#define FAR_WORD_BASELINE 129          /* 100 px caps from y 28 */
+#define FAR_BODY_TOP (FAR_WORD_BASELINE + 30)
+#define FAR_BODY_BOTTOM (FAR_M + FAR_S - 40)
+#define FAR_UNIT_GAP_X 6
+#define FAR_UNIT_GAP_Y 30
+
+static const lv_font_t *far_name_font(far_name_size_t z)
+{
+    return z == FAR_NAME_BIG ? &far_brl_140 : &far_brl_112;
+}
+
+/* Decode one UTF-8 code point; *i moves past it. */
+static uint32_t utf8_next(const char *s, size_t n, size_t *i)
+{
+    const unsigned char c = (unsigned char)s[*i];
+    if (c < 0x80 || *i + 1 >= n) {
+        (*i)++;
+        return c;
+    }
+    if ((c & 0xE0) == 0xC0) {
+        uint32_t cp = ((uint32_t)(c & 0x1F) << 6) | ((unsigned char)s[*i + 1] & 0x3Fu);
+        *i += 2;
+        return cp;
+    }
+    if ((c & 0xF0) == 0xE0 && *i + 2 < n) {
+        uint32_t cp = ((uint32_t)(c & 0x0F) << 12) |
+                      (((unsigned char)s[*i + 1] & 0x3Fu) << 6) |
+                      ((unsigned char)s[*i + 2] & 0x3Fu);
+        *i += 3;
+        return cp;
+    }
+    (*i)++;
+    return c;
+}
+
+/* The width of s[0, n) in font, or -1 when the font lacks a glyph. */
+static int text_width(const lv_font_t *font, const char *s, size_t n)
+{
+    int w = 0;
+    size_t i = 0;
+    while (i < n) {
+        const uint32_t cp = utf8_next(s, n, &i);
+        size_t j = i;
+        const uint32_t next = i < n ? utf8_next(s, n, &j) : 0;
+        lv_font_glyph_dsc_t d;
+        if (!lv_font_get_glyph_dsc(font, &d, cp, next)) {
+            return -1;
+        }
+        w += lv_font_get_glyph_width(font, cp, next);
+    }
+    return w;
+}
+
+static int far_width(const char *s, size_t n, far_name_size_t z, void *ctx)
+{
+    (void)ctx;
+    return text_width(far_name_font(z), s, n);
+}
+
+/* Height of a glyph's ink above the baseline: cap height for 'H', digit
+ * height for '0'. */
+static int ink_above_baseline(const lv_font_t *font, uint32_t letter)
+{
+    lv_font_glyph_dsc_t d;
+    if (!lv_font_get_glyph_dsc(font, &d, letter, 0)) {
+        return font->line_height - font->base_line;
+    }
+    return d.box_h + d.ofs_y;
+}
+
+/* Put label l, in font, with its baseline at y (screen). */
+static void place(lv_obj_t *l, const lv_font_t *font, int x, int baseline, int w)
+{
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_pos(l, x, y_for_baseline(font, baseline));
+    lv_obj_set_width(l, w);
+}
+
+static void draw_far_chart(lv_event_t *e)
+{
+    lv_layer_t *layer = lv_event_get_layer(e);
+    lv_area_t a;
+    lv_obj_get_coords(lv_event_get_target_obj(e), &a);
+    lv_draw_rect_dsc_t fill, line;
+    lv_draw_rect_dsc_init(&fill);
+    fill.bg_color = lv_color_hex(s_f_chart_fill);
+    lv_draw_rect_dsc_init(&line);
+    line.bg_color = lv_color_hex(s_f_chart_line);
+    int prev_top = -1;
+    const int bottom = FAR_S - 1;
+    for (int i = 0; i < HIST_LEN; i++) {
+        const int x0 = i * FAR_S / HIST_LEN, x1 = (i + 1) * FAR_S / HIST_LEN - 1;
+        const int h = s_f_cols[i];
+        if (h < 0) {
+            prev_top = -1;
+            continue;
+        }
+        int top = FAR_S - 1 - h;
+        top = top < 0 ? 0 : (top > bottom - 1 ? bottom - 1 : top);
+        lv_area_t r = {a.x1 + x0, a.y1 + top, a.x1 + x1, a.y1 + bottom};
+        lv_draw_rect(layer, &fill, &r);
+        int lt = top, lb = top + CHART_LINE_PX - 1;
+        if (prev_top >= 0) {
+            lt = prev_top < lt ? prev_top : lt;
+            lb = prev_top + CHART_LINE_PX - 1 > lb ? prev_top + CHART_LINE_PX - 1 : lb;
+        }
+        lb = lb > bottom ? bottom : lb;
+        lv_area_t l = {a.x1 + x0, a.y1 + lt, a.x1 + x1, a.y1 + lb};
+        lv_draw_rect(layer, &line, &l);
+        prev_top = top;
+    }
+}
+
+static void build_far(void)
+{
+    s_far = box(s_root, 0, 0, W, W);
+    s_f_bg = box(s_far, FAR_M, FAR_M, FAR_S, FAR_S);
+    paint(s_f_bg, hue_colors(HUE_MOSS)->base, OUTER_R);
+    s_f_fill = box(s_f_bg, 0, 0, FAR_S, 0);
+    paint(s_f_fill, hue_colors(HUE_MOSS)->fill, 0);
+    lv_obj_align(s_f_fill, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_hidden(s_f_fill, true);
+    s_f_chart = box(s_f_bg, 0, 0, FAR_S, FAR_S);
+    lv_obj_add_event_cb(s_f_chart, draw_far_chart, LV_EVENT_DRAW_MAIN, NULL);
+    lv_obj_set_hidden(s_f_chart, true);
+    for (int k = 0; k < HIST_LEN; k++) {
+        s_f_cols[k] = -1;
+    }
+    /* The fill and the chart are square; these keep them inside the
+     * square's rounded corners. */
+    const int lo = FAR_M + OUTER_R, hi = FAR_M + FAR_S - OUTER_R;
+    corner_mask(s_far, lo, lo, 180);
+    corner_mask(s_far, hi, lo, 270);
+    corner_mask(s_far, lo, hi, 90);
+    corner_mask(s_far, hi, hi, 0);
+
+    s_f_word = label(s_far, &far_brl_140, 0, FAR_M, 0, FAR_S, LV_TEXT_ALIGN_CENTER);
+    s_f_value = label(s_far, &far_num_187, COLOR_VALUE, 0, 0, 100, LV_TEXT_ALIGN_RIGHT);
+    s_f_unit = label(s_far, &far_brl_112, 0, 0, 0, 100, LV_TEXT_ALIGN_LEFT);
+    for (int i = 0; i < 2; i++) {
+        s_f_name[i] = label(s_far, &far_brl_140, COLOR_VALUE, FAR_M, 0, FAR_S,
+                            LV_TEXT_ALIGN_CENTER);
+    }
+}
+
 /* NO DATA can stay up for hours: black, no fills, text only. */
 static void build_nodata(void)
 {
     s_nodata = box(s_root, 0, 0, W, W);
-    lv_obj_t *head =
-        label(s_nodata, &brl_44, COLOR_NO_DATA_HEAD, 0, 120, W, LV_TEXT_ALIGN_CENTER);
-    lv_label_set_text(head, "No data from the DGX");
+    s_n_head = label(s_nodata, &brl_44, COLOR_NO_DATA_HEAD, 0, 120, W, LV_TEXT_ALIGN_CENTER);
     s_n_age = label(s_nodata, &jbm_num_82, COLOR_VALUE, 0, 196, W, LV_TEXT_ALIGN_CENTER);
     s_n_hint = label(s_nodata, &brl_30, COLOR_TEXT, 0, 318, W, LV_TEXT_ALIGN_CENTER);
 }
@@ -383,9 +548,11 @@ void view_init(lv_obj_t *screen, view_cb_t on_tap, view_cb_t on_long_press,
     lv_obj_add_event_cb(s_root, on_event, LV_EVENT_LONG_PRESSED, NULL);
 
     build_pages();
+    build_far();
     build_detail();
     build_nodata();
     lv_obj_set_hidden(s_pages, true);
+    lv_obj_set_hidden(s_far, true);
     lv_obj_set_hidden(s_detail, true);
 }
 
@@ -395,13 +562,18 @@ void view_set_animations(bool on)
 }
 
 void view_model_fill(view_model_t *m, const status_frame_t *f, link_state_t st,
-                     int64_t age_s, const carousel_t *c)
+                     int64_t age_s, const carousel_t *c, view_mode_t mode)
 {
     m->kind = carousel_view(c);
+    m->mode = mode;
     m->page = c->page;
     m->link = st;
     m->frame = f;
-    page_tiles(c->page, f, m->tiles);
+    if (mode == MODE_FAR) {
+        far_page((far_page_t)c->page, f, &m->far);
+    } else {
+        page_tiles(c->page, f, m->tiles);
+    }
     if (f->t > 0) {
         fmt_clock_hm(m->clock, sizeof(m->clock), f->t, f->has_tz ? f->tz_s : 0);
     } else {
@@ -507,6 +679,138 @@ static void render_pages(const view_model_t *m)
     s_last_page = (int)m->page;
 }
 
+
+/* The value and its unit: the unit beside the value when both fit in
+ * FAR_VALUE_W, else under it. The value is right-aligned in its slot, so
+ * the last digit keeps its column as it ticks. */
+static void render_far_value(const far_t *t)
+{
+    const lv_font_t *vf = far_big_digits(t) ? &far_num_187 : &far_num_147;
+    const lv_font_t *uf = &far_brl_112;
+    const int slot_w = t->slot * lv_font_get_glyph_width(vf, '0', '0');
+    const int digit_h = ink_above_baseline(vf, '0');
+    const int cap_h = ink_above_baseline(uf, 'H');
+    const int uw = t->unit[0] ? text_width(uf, t->unit, strlen(t->unit)) : 0;
+    const bool beside = t->unit[0] && uw >= 0 && slot_w + FAR_UNIT_GAP_X + uw <= FAR_VALUE_W;
+    const int body = FAR_BODY_BOTTOM - FAR_BODY_TOP;
+    if (beside || !t->unit[0]) {
+        const int total = beside ? slot_w + FAR_UNIT_GAP_X + uw : slot_w;
+        const int x0 = (W - total) / 2;
+        const int vb = FAR_BODY_TOP + (body + digit_h) / 2;
+        place(s_f_value, vf, x0, vb, slot_w);
+        place(s_f_unit, uf, x0 + slot_w + FAR_UNIT_GAP_X, vb, uw + 8);
+        lv_obj_set_style_text_align(s_f_unit, LV_TEXT_ALIGN_LEFT, 0);
+    } else {
+        const int block = digit_h + FAR_UNIT_GAP_Y + cap_h;
+        const int vb = FAR_BODY_TOP + (body - block) / 2 + digit_h;
+        place(s_f_value, vf, (W - slot_w) / 2, vb, slot_w);
+        place(s_f_unit, uf, FAR_M, vb + FAR_UNIT_GAP_Y + cap_h, FAR_S);
+        lv_obj_set_style_text_align(s_f_unit, LV_TEXT_ALIGN_CENTER, 0);
+    }
+    set_text(s_f_value, t->value);
+    set_text(s_f_unit, t->unit);
+}
+
+/* The name on one or two lines, as large as fits (far_name_layout). */
+static void render_far_name(const far_t *t)
+{
+    far_name_t n;
+    far_name_layout(t->text, FAR_TEXT_W, far_width, NULL, &n);
+    const lv_font_t *font = far_name_font(n.size);
+    const int cap_h = ink_above_baseline(font, 'H');
+    const int gap = cap_h * 3 / 10;
+    const int block = n.lines * cap_h + (n.lines - 1) * gap;
+    const int top = FAR_BODY_TOP + (FAR_BODY_BOTTOM - FAR_BODY_TOP - block) / 2;
+    for (int i = 0; i < 2; i++) {
+        lv_obj_set_hidden(s_f_name[i], i >= n.lines);
+        if (i < n.lines) {
+            place(s_f_name[i], font, FAR_M, top + cap_h + i * (cap_h + gap), FAR_S);
+            set_text(s_f_name[i], n.line[i]);
+        }
+    }
+}
+
+/* The level fill (or, in history style, the chart) across the square.
+ * None while stale: the stale value color is only tested over the base. */
+static void render_far_level(const view_model_t *m, bool same_page)
+{
+    const far_t *t = &m->far;
+    static int16_t cols[HIST_LEN];
+    const bool live = m->link == LINK_LIVE;
+    const bool chart = live && m->style == CHART_HISTORY && m->hist_heights != NULL &&
+                       t->hist != HIST_NONE &&
+                       m->hist_heights(t->hist, m->frame, FAR_S, cols);
+    lv_obj_set_hidden(s_f_chart, !chart);
+    if (chart) {
+        const hue_colors_t *c = hue_colors(t->hue);
+        if (memcmp(cols, s_f_cols, sizeof(cols)) != 0 || c->fill != s_f_chart_fill ||
+            c->line != s_f_chart_line) {
+            memcpy(s_f_cols, cols, sizeof(cols));
+            s_f_chart_fill = c->fill;
+            s_f_chart_line = c->line;
+            lv_obj_invalidate(s_f_chart);
+        }
+    }
+    const int px = !live || chart || t->fill < 0 ? -1 : (int)(t->fill * (float)FAR_S + 0.5f);
+    if (px == s_f_fill_px) {
+        return;
+    }
+    lv_anim_delete(s_f_fill, fill_height_cb);
+    if (px < 0) {
+        lv_obj_set_hidden(s_f_fill, true);
+    } else if (s_animate && same_page && s_f_fill_px >= 0) {
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, s_f_fill);
+        lv_anim_set_exec_cb(&a, fill_height_cb);
+        lv_anim_set_values(&a, lv_obj_get_height(s_f_fill), px);
+        lv_anim_set_duration(&a, FILL_ANIM_MS);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_start(&a);
+    } else {
+        lv_obj_set_height(s_f_fill, px);
+        lv_obj_set_hidden(s_f_fill, false);
+    }
+    s_f_fill_px = px;
+}
+
+static void render_far(const view_model_t *m)
+{
+    const far_t *t = &m->far;
+    if (s_f_hue != (int)t->hue) {
+        const hue_colors_t *c = hue_colors(t->hue);
+        lv_obj_set_style_bg_color(s_f_bg, lv_color_hex(c->base), 0);
+        lv_obj_set_style_bg_color(s_f_fill, lv_color_hex(c->fill), 0);
+        set_text_color(s_f_word, c->tint);
+        set_text_color(s_f_unit, c->tint);
+        s_f_hue = (int)t->hue;
+    }
+    /* The word at 100 px caps, or 81 px when that is too wide. */
+    const char *word = t->word ? t->word : "";
+    const int ww = text_width(&far_brl_140, word, strlen(word));
+    place(s_f_word, ww >= 0 && ww <= FAR_TEXT_W ? &far_brl_140 : &far_brl_112, FAR_M,
+          FAR_WORD_BASELINE, FAR_S);
+    set_text(s_f_word, word);
+
+    const uint32_t ink = m->link == LINK_LIVE ? COLOR_VALUE : COLOR_STALE;
+    set_text_color(s_f_value, ink);
+    for (int i = 0; i < 2; i++) {
+        set_text_color(s_f_name[i], ink);
+    }
+    lv_obj_set_hidden(s_f_value, t->is_text);
+    lv_obj_set_hidden(s_f_unit, t->is_text);
+    if (t->is_text) {
+        render_far_name(t);
+    } else {
+        lv_obj_set_hidden(s_f_name[0], true);
+        lv_obj_set_hidden(s_f_name[1], true);
+        render_far_value(t);
+    }
+    const bool same_page = s_f_last_page == (int)m->page;
+    render_far_level(m, same_page);
+    s_f_last_page = (int)m->page;
+}
+
 static void render_detail(const view_model_t *m)
 {
     const status_frame_t *f = m->frame;
@@ -515,7 +819,10 @@ static void render_detail(const view_model_t *m)
     const int inner = W - 2 * 28;
     /* Opened from the LLM page with an engine up: the engines, not the
      * temperatures. */
-    const bool llm = m->page == PAGE_LLM && llm_detail(line, sizeof(line), f);
+    const bool llm_page = m->mode == MODE_FAR
+                              ? ((int)m->page == FAR_LLM || (int)m->page == FAR_MODEL)
+                              : m->page == PAGE_LLM;
+    const bool llm = llm_page && llm_detail(line, sizeof(line), f);
     /* Re-lay the first column only when the mode changes: a width or long
      * mode change makes LVGL re-measure and redraw the label. */
     if (llm != s_d_llm_mode) {
@@ -553,25 +860,45 @@ static void render_detail(const view_model_t *m)
     set_text(s_d_footer, line);
     set_text(s_d_chart_value, chart_style_name(m->style));
     s_last_page = -1;
+    s_f_last_page = -1;
 }
 
 static void render_nodata(const view_model_t *m)
 {
+    /* Far mode: the heading at 81 px caps, readable from 2 m. */
+    const int far = m->mode == MODE_FAR;
+    if (far != s_n_far) {
+        s_n_far = far;
+        lv_obj_set_style_text_font(s_n_head, far ? &far_brl_112 : &brl_44, 0);
+        lv_obj_set_y(s_n_head, far ? 60 : 120);
+        set_text(s_n_head, far ? "NO DATA" : "No data from the DGX");
+    }
     bool never = strcmp(m->age, "never") == 0;
     set_text(s_n_age, never ? "" : m->age);
     set_text(s_n_hint, never ? "No frame since boot.\nCheck that dgx-status is running."
                              : "Check that dgx-status is running.");
     lv_label_set_long_mode(s_n_hint, LV_LABEL_LONG_MODE_WRAP);
     s_last_page = -1;
+    s_f_last_page = -1;
 }
 
 void view_render(const view_model_t *m)
 {
-    lv_obj_set_hidden(s_pages, m->kind != VIEW_PAGE);
+    const bool far = m->mode == MODE_FAR;
+    lv_obj_set_hidden(s_pages, m->kind != VIEW_PAGE || far);
+    lv_obj_set_hidden(s_far, m->kind != VIEW_PAGE || !far);
     lv_obj_set_hidden(s_detail, m->kind != VIEW_DETAIL);
     lv_obj_set_hidden(s_nodata, m->kind != VIEW_NO_DATA);
     switch (m->kind) {
-    case VIEW_PAGE: render_pages(m); break;
+    case VIEW_PAGE:
+        if (far) {
+            render_far(m);
+            s_last_page = -1;
+        } else {
+            render_pages(m);
+            s_f_last_page = -1;
+        }
+        break;
     case VIEW_DETAIL: render_detail(m); break;
     case VIEW_NO_DATA: render_nodata(m); break;
     }
@@ -585,4 +912,9 @@ void view_set_shift(int dx, int dy)
 lv_obj_t *view_tile_value(int i)
 {
     return s_tile[i].value;
+}
+
+lv_obj_t *view_far_value(void)
+{
+    return s_f_value;
 }

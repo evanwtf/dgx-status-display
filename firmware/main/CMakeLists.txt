@@ -16,6 +16,10 @@ idf_component_register(
         "fonts/brl_30.c"
         "fonts/brl_32.c"
         "fonts/brl_44.c"
+        "fonts/far_num_187.c"
+        "fonts/far_num_147.c"
+        "fonts/far_brl_140.c"
+        "fonts/far_brl_112.c"
         "logic/frame_parse.c"
         "logic/line_reader.c"
         "logic/link_state.c"
@@ -31,6 +35,7 @@ idf_component_register(
         "logic/button.c"
         "logic/pmu_key.c"
         "logic/co5300.c"
+        "logic/far.c"
     INCLUDE_DIRS "." "logic"
     REQUIRES
         esp_driver_i2c

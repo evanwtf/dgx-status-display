@@ -41,6 +41,7 @@ static bool nvs_save_u8(void *ctx, uint8_t value)
 
 static const settings_store_t s_chart = {nvs_load_u8, nvs_save_u8, (void *)"chart"};
 static const settings_store_t s_turn = {nvs_load_u8, nvs_save_u8, (void *)"turn"};
+static const settings_store_t s_mode = {nvs_load_u8, nvs_save_u8, (void *)"mode"};
 
 static void ensure_ready(void)
 {
@@ -70,4 +71,10 @@ const settings_store_t *settings_nvs_turn_store(void)
 {
     ensure_ready();
     return &s_turn;
+}
+
+const settings_store_t *settings_nvs_mode_store(void)
+{
+    ensure_ready();
+    return &s_mode;
 }

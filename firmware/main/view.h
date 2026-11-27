@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "logic/carousel.h"
+#include "logic/far.h"
 #include "logic/history.h"
 #include "logic/link_state.h"
 #include "logic/settings.h"
@@ -23,8 +24,10 @@
 
 typedef struct {
     view_kind_t kind;
-    page_id_t page;
+    view_mode_t mode; /* near: tiles; far: one metric, `far` */
+    page_id_t page;   /* in far mode, a far_page_t */
     tile_t tiles[TILES_PER_PAGE];
+    far_t far;
     link_state_t link;
     char clock[8];   /* "22:44", or "" before the first frame */
     char age[24];    /* time since the last frame: "5s", "2m 13s", "never" */
@@ -49,10 +52,11 @@ typedef void (*view_cb_t)(void);
 void view_init(lv_obj_t *screen, view_cb_t on_tap, view_cb_t on_long_press,
                view_cb_t on_chart_toggle);
 
-/* Fill the parts of the model that come from the frame, the link state and
- * the carousel. The caller sets style, hist and the detail footer. */
+/* Fill the parts of the model that come from the frame, the link state,
+ * the carousel and the mode. The caller sets style, hist and the detail
+ * footer. */
 void view_model_fill(view_model_t *m, const status_frame_t *f, link_state_t st,
-                     int64_t age_s, const carousel_t *c);
+                     int64_t age_s, const carousel_t *c, view_mode_t mode);
 
 /* Draw the model. Sets text only where it changed. */
 void view_render(const view_model_t *m);
@@ -66,3 +70,5 @@ void view_set_shift(int dx, int dy);
 
 /* The value label of tile i (0-3). For the alignment test in the preview. */
 lv_obj_t *view_tile_value(int i);
+/* The far-mode value label. For the same test. */
+lv_obj_t *view_far_value(void);

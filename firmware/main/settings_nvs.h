@@ -10,3 +10,6 @@ const settings_store_t *settings_nvs_chart_store(void);
 
 /* The store for the screen rotation (key "turn"). Same rules. */
 const settings_store_t *settings_nvs_turn_store(void);
+
+/* The store for the view mode, near or far (key "mode"). Same rules. */
+const settings_store_t *settings_nvs_mode_store(void);

@@ -35,6 +35,7 @@ static gpio_button_t s_buttons[] = {
 #define N_BUTTONS (sizeof(s_buttons) / sizeof(s_buttons[0]))
 
 static void (*s_on_key_short)(void);
+static void (*s_on_boot_short)(void);
 static uint32_t s_last_pmu_ms;
 static int s_pmu_fails;
 
@@ -98,6 +99,9 @@ static void poll(lv_timer_t *t)
             if (b->pin == BOARD_BTN_KEY && button_is_short(held) && s_on_key_short != NULL) {
                 s_on_key_short();
             }
+            if (b->pin == BOARD_BTN_BOOT && button_is_short(held) && s_on_boot_short != NULL) {
+                s_on_boot_short();
+            }
             break;
         case BUTTON_NONE:
             break;
@@ -109,9 +113,10 @@ static void poll(lv_timer_t *t)
     }
 }
 
-void buttons_start(void (*on_key_short)(void))
+void buttons_start(void (*on_key_short)(void), void (*on_boot_short)(void))
 {
     s_on_key_short = on_key_short;
+    s_on_boot_short = on_boot_short;
     /* Input only: GPIO9 is a strap pin and must never be driven. BOOT and
      * KEY have 10K pull-ups on the board; the internal one is a backstop.
      * PWR (GPIO18) is pulled up by R11 and pulled down by T1: no internal

@@ -23,6 +23,8 @@
 #include "logic/burnin.h"
 #include "logic/carousel.h"
 #include "logic/co5300.h"
+#include "logic/far.h"
+#include "logic/settings.h"
 #include "logic/history.h"
 #include "logic/status.h"
 #include "lvgl.h"
@@ -42,6 +44,7 @@ static int s_bad_windows;
 static uint8_t s_rgb[W * W * 3];
 static int s_failed;
 static chart_style_t s_style = CHART_LEVEL;
+static view_mode_t s_mode = MODE_NEAR;
 static history_t s_hist;
 
 static bool preview_heights(hist_metric_t m, const status_frame_t *f, int height,
@@ -54,7 +57,7 @@ static bool preview_heights(hist_metric_t m, const status_frame_t *f, int height
 #define HALF (W / 2)
 #define SEP 8
 #define SHEET_COLS 4
-#define SHEET_MAX 36
+#define SHEET_MAX 96
 #define SHEET_W (SHEET_COLS * HALF + (SHEET_COLS - 1) * SEP)
 static uint8_t s_sheet[SHEET_W * ((SHEET_MAX / SHEET_COLS) * (HALF + SEP)) * 3];
 static int s_sheet_n;
@@ -257,7 +260,7 @@ static void show(const char *dir, const char *name, const status_frame_t *f, lin
 {
     view_model_t m;
     memset(&m, 0, sizeof(m));
-    view_model_fill(&m, f, st, age_s, &c);
+    view_model_fill(&m, f, st, age_s, &c, s_mode);
     m.style = s_style;
     m.hist_heights = preview_heights;
     m.accepted = 3600;
@@ -306,10 +309,9 @@ static carousel_t on_page(page_id_t p)
     return c;
 }
 
-/* Absolute x of the last character of tile i's value. */
-static int32_t last_char_x(int i)
+/* Absolute x of the last character of label l. */
+static int32_t label_last_x(lv_obj_t *l)
 {
-    lv_obj_t *l = view_tile_value(i);
     lv_obj_update_layout(l);
     const char *t = lv_label_get_text(l);
     uint32_t n = 0; /* UTF-8 code points */
@@ -321,6 +323,35 @@ static int32_t last_char_x(int i)
     lv_area_t a;
     lv_obj_get_coords(l, &a);
     return a.x1 + p.x;
+}
+
+/* Absolute x of the last character of tile i's value. */
+static int32_t last_char_x(int i)
+{
+    return label_last_x(view_tile_value(i));
+}
+
+/* Far mode: page p with two values; the last digit keeps its column. */
+static void check_far_column(const char *what, far_page_t p, status_frame_t *f, float *field,
+                             float short_v, float long_v)
+{
+    carousel_t c = on_page((page_id_t)p);
+    view_model_t m;
+    int32_t x[2];
+    char text[2][FAR_VALUE_MAX];
+    float v[2] = {short_v, long_v};
+    for (int k = 0; k < 2; k++) {
+        *field = v[k];
+        memset(&m, 0, sizeof(m));
+        view_model_fill(&m, f, LINK_LIVE, 0, &c, MODE_FAR);
+        render(&m);
+        x[k] = label_last_x(view_far_value());
+        snprintf(text[k], sizeof(text[k]), "%s", lv_label_get_text(view_far_value()));
+    }
+    int ok = x[0] == x[1] && strlen(text[0]) != strlen(text[1]);
+    printf("%s far %-8s \"%s\" x=%d, \"%s\" x=%d\n", ok ? "ok  " : "FAIL", what, text[0],
+           (int)x[0], text[1], (int)x[1]);
+    s_failed += !ok;
 }
 
 /* Render page p with two frames and compare tile i's last-digit column. */
@@ -335,7 +366,7 @@ static void check_column(const char *what, page_id_t p, int i, status_frame_t *f
     for (int k = 0; k < 2; k++) {
         *field = v[k];
         memset(&m, 0, sizeof(m));
-        view_model_fill(&m, f, LINK_LIVE, 0, &c);
+        view_model_fill(&m, f, LINK_LIVE, 0, &c, MODE_NEAR);
         render(&m);
         x[k] = last_char_x(i);
         snprintf(text[k], sizeof(text[k]), "%s", lv_label_get_text(view_tile_value(i)));
@@ -488,6 +519,112 @@ int main(int argc, char **argv)
     }
     lv_display_set_rotation(d, LV_DISPLAY_ROTATION_0);
 
+
+    /* ---- Far mode: one metric per page, read from 2 m ---- */
+    s_mode = MODE_FAR;
+    s_style = CHART_LEVEL;
+    {
+        static const char *const state_name[3] = {"idle", "busy", "hot"};
+        const status_frame_t *states[3] = {&real, &busy, &hot};
+        for (int st = 0; st < 3; st++) {
+            for (int p = 0; p < FAR_PAGE_COUNT; p++) {
+                char name[64];
+                snprintf(name, sizeof(name), "far-%s-%d-%s", state_name[st], p,
+                         far_page_name((far_page_t)p));
+                for (char *ch = name; *ch; ch++) {
+                    *ch = (char)(*ch >= 'A' && *ch <= 'Z' ? *ch - 'A' + 'a' : *ch);
+                }
+                if (far_hidden((far_page_t)p, states[st])) {
+                    printf("%s: hidden\n", name);
+                    continue;
+                }
+                show(dir, name, states[st], LINK_LIVE, 0, on_page((page_id_t)p));
+            }
+        }
+        /* The idle frame hides LLM and Model; a busy one shows both. */
+        if (!far_hidden(FAR_LLM, &real) || !far_hidden(FAR_MODEL, &real) ||
+            far_hidden(FAR_LLM, &busy) || far_hidden(FAR_MODEL, &busy)) {
+            fprintf(stderr, "FAIL far LLM and Model hiding\n");
+            s_failed++;
+        }
+    }
+    show(dir, "far-missing-gpu", &missing, LINK_LIVE, 0, on_page((page_id_t)FAR_GPU));
+    show(dir, "far-missing-memory", &missing, LINK_LIVE, 0, on_page((page_id_t)FAR_MEMORY));
+    show(dir, "far-stale-gpu", &busy, LINK_STALE, 6, on_page((page_id_t)FAR_GPU));
+    show(dir, "far-stale-temp", &hot, LINK_STALE, 6, on_page((page_id_t)FAR_TEMP));
+    {
+        status_frame_t big = busy;
+        big.llm_out_tps = 2350; /* "2.4" k tok/s */
+        show(dir, "far-llm-k", &big, LINK_LIVE, 0, on_page((page_id_t)FAR_LLM));
+        big.llm_out_tps = 940;
+        show(dir, "far-llm-940", &big, LINK_LIVE, 0, on_page((page_id_t)FAR_LLM));
+        big.gpu_c = 100; /* three digits and the unit */
+        show(dir, "far-temp-100", &big, LINK_LIVE, 0, on_page((page_id_t)FAR_TEMP));
+        big.gpu_pct = 100;
+        show(dir, "far-gpu-100", &big, LINK_LIVE, 0, on_page((page_id_t)FAR_GPU));
+    }
+    {
+        /* Names: short, medium, long, several, and the occupant alone. */
+        static const char *const names[][2] = {
+            {"far-name-short", "Qwen/Qwen3-8B"},
+            {"far-name-medium", "XiaomiMiMo/MiMo-v2.6-Flash"},
+            {"far-name-long", "harborwater/Ornith-1.5-35B-A3B-AWQ-INT4"},
+            {"far-name-longer", "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"},
+            {"far-name-two", "Qwen/Qwen3-8B, google/gemma-3-27b-it"},
+            {"far-name-nobreak", "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUV"},
+        };
+        for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            status_frame_t n = busy;
+            snprintf(n.llm_model, sizeof(n.llm_model), "%s", names[i][1]);
+            show(dir, names[i][0], &n, LINK_LIVE, 0, on_page((page_id_t)FAR_MODEL));
+        }
+        status_frame_t occ = real;
+        snprintf(occ.occ, sizeof(occ.occ), "llama.cpp");
+        show(dir, "far-name-occupant", &occ, LINK_LIVE, 0, on_page((page_id_t)FAR_MODEL));
+        snprintf(occ.occ, sizeof(occ.occ), "vllm"); /* one line, 100 px caps */
+        show(dir, "far-name-vllm", &occ, LINK_LIVE, 0, on_page((page_id_t)FAR_MODEL));
+    }
+    show(dir, "far-no-data", &real, LINK_NO_DATA, 133, nodata);
+    show(dir, "far-no-data-boot", &missing, LINK_NO_DATA, -1, nodata);
+    show(dir, "far-detail-llm", &busy, LINK_LIVE, 0,
+         (carousel_t){.page = (page_id_t)FAR_LLM, .detail = true});
+    {
+        /* The mode with nothing stored: far, on its first page. */
+        const view_mode_t def = settings_mode(NULL);
+        printf("default mode (nothing stored): %s\n", view_mode_name(def));
+        if (def != MODE_FAR) {
+            fprintf(stderr, "FAIL the default mode is not far\n");
+            s_failed++;
+        }
+        s_mode = def;
+        carousel_t first;
+        carousel_init(&first, 0);
+        carousel_set_page_count(&first, FAR_PAGE_COUNT, 0);
+        carousel_tick(&first, LINK_LIVE, 0);
+        show(dir, "far-default", &busy, LINK_LIVE, 0, first);
+    }
+    synthetic_history(&busy);
+    s_style = CHART_HISTORY;
+    show(dir, "far-history-gpu", &busy, LINK_LIVE, 0, on_page((page_id_t)FAR_GPU));
+    show(dir, "far-history-memory", &busy, LINK_LIVE, 0, on_page((page_id_t)FAR_MEMORY));
+    synthetic_history(&hot);
+    show(dir, "far-history-hot-temp", &hot, LINK_LIVE, 0, on_page((page_id_t)FAR_TEMP));
+    s_style = CHART_LEVEL;
+    static const char *const far_turned[3] = {"far-turn-90", "far-turn-180", "far-turn-270"};
+    for (int k = 1; k <= 3; k++) {
+        lv_display_set_rotation(d, (lv_display_rotation_t)lrot_for_cw_turns(k));
+        show(dir, far_turned[k - 1], &busy, LINK_LIVE, 0, on_page((page_id_t)FAR_GPU));
+    }
+    lv_display_set_rotation(d, (lv_display_rotation_t)lrot_for_cw_turns(1));
+    {
+        status_frame_t n = busy;
+        snprintf(n.llm_model, sizeof(n.llm_model), "harborwater/Ornith-1.5-35B-A3B-AWQ-INT4");
+        show(dir, "far-turn-90-name-long", &n, LINK_LIVE, 0, on_page((page_id_t)FAR_MODEL));
+        show(dir, "far-turn-90-memory", &n, LINK_LIVE, 0, on_page((page_id_t)FAR_MEMORY));
+    }
+    lv_display_set_rotation(d, LV_DISPLAY_ROTATION_0);
+    s_mode = MODE_NEAR;
+
     /* Level and history side by side: one row per page. */
     {
         static uint8_t styles[(2 * HALF + SEP) * (3 * HALF + 2 * SEP) * 3];
@@ -500,7 +637,7 @@ int main(int argc, char **argv)
                 view_model_t m;
                 memset(&m, 0, sizeof(m));
                 carousel_t c = on_page((page_id_t)row);
-                view_model_fill(&m, &busy, LINK_LIVE, 0, &c);
+                view_model_fill(&m, &busy, LINK_LIVE, 0, &c, MODE_NEAR);
                 m.style = s_style;
                 m.hist_heights = preview_heights;
                 render(&m);
@@ -548,6 +685,11 @@ int main(int argc, char **argv)
     check_column("fan kRPM", PAGE_COOLING, 1, &f, &f.fan1_rpm, 2700, 13500);
     check_column("memory", PAGE_HOST, 1, &f, &f.mem_used_gib, 7.2f, 121.9f);
     check_column("load", PAGE_HOST, 2, &f, &f.load1, 0.35f, 12.34f);
+    check_far_column("gpu %", FAR_GPU, &f, &f.gpu_pct, 9, 100);
+    check_far_column("power W", FAR_POWER, &f, &f.gpu_w, 4, 180);
+    check_far_column("temp C", FAR_TEMP, &f, &f.gpu_c, 9, 85);
+    check_far_column("memory", FAR_MEMORY, &f, &f.mem_used_gib, 7.2f, 101.4f);
+    check_far_column("cpu %", FAR_CPU, &f, &f.cpu_pct, 0, 63);
 
     /* Same LV_MEM_SIZE as the firmware, after every page and the detail
      * page have been drawn. The host is 64-bit, so its pointers and LVGL
@@ -555,9 +697,9 @@ int main(int argc, char **argv)
      * lower. Compare runs of the preview, not the preview with the board. */
     lv_mem_monitor_t mon;
     lv_mem_monitor(&mon);
-    printf("lv heap: %u%% used, %lu of %lu B free, largest %lu B\n", (unsigned)mon.used_pct,
-           (unsigned long)mon.free_size, (unsigned long)mon.total_size,
-           (unsigned long)mon.free_biggest_size);
+    printf("lv heap: %u%% used, %lu of %lu B free, largest %lu B, peak %lu B\n",
+           (unsigned)mon.used_pct, (unsigned long)mon.free_size, (unsigned long)mon.total_size,
+           (unsigned long)mon.free_biggest_size, (unsigned long)mon.max_used);
     if (s_bad_windows > 0) {
         fprintf(stderr, "FAIL %d flushed windows break the CO5300 rule\n", s_bad_windows);
         s_failed++;
