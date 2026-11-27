@@ -8,6 +8,16 @@ void carousel_init(carousel_t *c, int64_t now_ms)
     c->page_since_ms = now_ms;
     c->detail_since_ms = now_ms;
     c->hidden = 0;
+    c->n_pages = PAGE_COUNT;
+}
+
+void carousel_set_page_count(carousel_t *c, int n, int64_t now_ms)
+{
+    c->n_pages = n < 1 ? 1 : (n > 32 ? 32 : n);
+    c->page = (page_id_t)0;
+    c->hidden = 0;
+    c->detail = false;
+    c->page_since_ms = now_ms;
 }
 
 static bool is_hidden(const carousel_t *c, page_id_t p)
@@ -18,8 +28,9 @@ static bool is_hidden(const carousel_t *c, page_id_t p)
 static void next_page(carousel_t *c, int64_t now_ms)
 {
     int p = (int)c->page;
-    for (int i = 0; i < PAGE_COUNT; i++) {
-        p = (p + 1) % PAGE_COUNT;
+    const int n = c->n_pages > 0 ? c->n_pages : PAGE_COUNT;
+    for (int i = 0; i < n; i++) {
+        p = (p + 1) % n;
         if (!is_hidden(c, (page_id_t)p)) {
             break;
         }
@@ -30,7 +41,8 @@ static void next_page(carousel_t *c, int64_t now_ms)
 
 void carousel_set_hidden(carousel_t *c, page_id_t p, bool hidden, int64_t now_ms)
 {
-    if (p == PAGE_GPU || (unsigned)p >= PAGE_COUNT) {
+    const int n = c->n_pages > 0 ? c->n_pages : PAGE_COUNT;
+    if (p == PAGE_GPU || (int)p >= n || (int)p < 0) {
         return; /* at least one page always shows */
     }
     const uint32_t bit = 1u << (unsigned)p;

@@ -41,3 +41,18 @@ turn_t settings_turn(const settings_store_t *s);
  * applies even when the save fails. */
 turn_t settings_turn_cw(const settings_store_t *s, turn_t current);
 int turn_degrees(turn_t t);
+
+/* Near mode: the six pages of four tiles. Far mode: one metric per page,
+ * sized to read from 2 m (far.h). BOOT switches between them. */
+typedef enum {
+    MODE_NEAR = 0,
+    MODE_FAR = 1,
+} view_mode_t;
+
+/* The stored mode, or MODE_FAR when nothing valid is stored. */
+view_mode_t settings_mode(const settings_store_t *s);
+/* Switch to the other mode and store it. Returns the new mode; it applies
+ * even when the save fails. */
+view_mode_t settings_toggle_mode(const settings_store_t *s, view_mode_t current);
+/* "far" or "near", for the log. */
+const char *view_mode_name(view_mode_t m);

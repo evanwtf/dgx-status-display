@@ -47,3 +47,26 @@ int turn_degrees(turn_t t)
 {
     return 90 * (int)t;
 }
+
+view_mode_t settings_mode(const settings_store_t *s)
+{
+    uint8_t v = 0;
+    if (s == NULL || s->load == NULL || !s->load(s->ctx, &v)) {
+        return MODE_FAR;
+    }
+    return v == MODE_NEAR ? MODE_NEAR : MODE_FAR;
+}
+
+view_mode_t settings_toggle_mode(const settings_store_t *s, view_mode_t current)
+{
+    const view_mode_t next = current == MODE_FAR ? MODE_NEAR : MODE_FAR;
+    if (s != NULL && s->save != NULL) {
+        (void)s->save(s->ctx, (uint8_t)next);
+    }
+    return next;
+}
+
+const char *view_mode_name(view_mode_t m)
+{
+    return m == MODE_NEAR ? "near" : "far";
+}

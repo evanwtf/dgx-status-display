@@ -17,8 +17,8 @@
  * - NO DATA, entering or leaving, changes at once, without a fade.
  * - A tap or long press during a transition is queued; it runs when the
  *   fade-in ends. At most one is queued; later ones are dropped.
- * - A rotation (KEY) waits for the dark moment, so the full redraw it
- *   causes is never seen.
+ * - A rotation (KEY) or a mode switch (BOOT) waits for the dark moment, so
+ *   the full redraw it causes is never seen. Both use transition_turn().
  * - Times are uint32_t milliseconds: the difference survives a wrap.
  */
 #pragma once
@@ -73,7 +73,8 @@ bool transition_busy(const transition_t *t);
 /* Touch: runs now when idle, else queues (at most one). */
 void transition_tap(transition_t *t, carousel_t *c, int64_t now_ms);
 void transition_long_press(transition_t *t, carousel_t *c, int64_t now_ms);
-/* KEY: a rotation is waiting. The next step starts a fade for it. */
+/* KEY or BOOT: a rotation or a mode switch is waiting. The next step
+ * starts a fade for it. */
 void transition_turn(transition_t *t);
 
 /* One step: after carousel_tick(), with the brightness the burn-in rules
