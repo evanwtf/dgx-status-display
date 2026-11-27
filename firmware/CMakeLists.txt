@@ -9,3 +9,11 @@ project(dgx_status_display)
 # deeper than 4; this caps cJSON itself at 8 as a second line of defense.
 idf_component_get_property(json_lib json COMPONENT_LIB)
 target_compile_definitions(${json_lib} PRIVATE CJSON_NESTING_LIMIT=8)
+
+# LVGL's assert handler: trap, so the panic handler saves a core dump and
+# reboots. LVGL's default spins until the task watchdog fires. PUBLIC: main
+# includes lv_assert.h through lvgl.h too. LVGL uses the macro as a whole
+# statement, and a ';' does not survive CMake and ninja, so the statement
+# is an if with an empty body.
+idf_component_get_property(lvgl_lib lvgl__lvgl COMPONENT_LIB)
+target_compile_definitions(${lvgl_lib} PUBLIC "LV_ASSERT_HANDLER=if((__builtin_trap(),1)){}")

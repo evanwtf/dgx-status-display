@@ -8,6 +8,14 @@
 
 #include "lvgl.h"
 
+/* ESP-IDF applies a sdkconfig.defaults line only when firmware/sdkconfig
+ * lacks the key, so a sdkconfig from an older build keeps the old values.
+ * Without these the far-mode text draws blank, and the build still passes.
+ * The preview builds from the same sdkconfig and stops here too. */
+#if !LV_USE_FONT_COMPRESSED || LV_MEM_SIZE < 98304 || !LV_USE_ASSERT_MALLOC
+#error "stale firmware/sdkconfig: delete it and rebuild"
+#endif
+
 LV_FONT_DECLARE(jbm_num_110) /* digits . - > and the em dash */
 LV_FONT_DECLARE(jbm_num_82)  /* the same, plus "dhmsnevr " for ages */
 LV_FONT_DECLARE(jbm_mix_66)  /* digits, a-z, . - > _ + and the em dash */

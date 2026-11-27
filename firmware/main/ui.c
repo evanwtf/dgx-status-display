@@ -202,11 +202,13 @@ static void log_stack(int64_t now)
                      mon.used_pct >= LV_HEAP_HIGH_PCT;
     esp_log_level_t level = near_miss ? ESP_LOG_WARN : ESP_LOG_INFO;
     ESP_LOG_LEVEL(level, TAG,
-                  "free: stack rx %lu B, lvgl %lu B; lv heap %u%% used, largest %lu B; "
+                  "free: stack rx %lu B, lvgl %lu B; lv heap %u%% used, largest %lu B, "
+                  "peak %lu B; "
                   "heap %lu B, min %lu B; slowest refresh %lu ms; turn %d; "
                   "last fade %lu ms (redraw %lu ms); pwr hold power-off %s",
                   (unsigned long)rx, (unsigned long)s_lvgl_stack_free, (unsigned)mon.used_pct,
-                  (unsigned long)mon.free_biggest_size, (unsigned long)esp_get_free_heap_size(),
+                  (unsigned long)mon.free_biggest_size, (unsigned long)mon.max_used,
+                  (unsigned long)esp_get_free_heap_size(),
                   (unsigned long)esp_get_minimum_free_heap_size(),
                   (unsigned long)s_refr_max_ms, turn_degrees(s_turn),
                   (unsigned long)s_tr.last_ms, (unsigned long)s_redraw_ms,

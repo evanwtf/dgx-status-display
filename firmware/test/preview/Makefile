@@ -24,7 +24,8 @@ APP_SRC := preview.c png.c $(FW)/main/view.c \
 	$(FW)/main/logic/burnin.c $(FW)/main/logic/co5300.c $(FW)/main/logic/far.c
 
 KCONFIG := $(BUILD)/lv_kconfig.h
-COMMON := -O1 -include $(KCONFIG) -I$(LVGL_DIR) -I$(FW)/main
+# The firmware's LVGL assert handler (firmware/CMakeLists.txt): trap.
+COMMON := -O1 -include $(KCONFIG) -I$(LVGL_DIR) -I$(FW)/main '-DLV_ASSERT_HANDLER=if((__builtin_trap(),1)){}'
 # Same warning set as the firmware's own code (main/CMakeLists.txt).
 APP_CFLAGS := $(COMMON) -std=gnu11 -Wall -Wextra -Werror -Wshadow -I$(FW)/main/logic \
 	-I$(CJSON_DIR) -I.
