@@ -2,8 +2,10 @@
 
 ## Unreleased
 
-- Far mode, the new default: one metric per page (GPU, POWER, TEMP, LLM,
-  MODEL, MEMORY, CPU), sized from an eye chart read on the board at 2 m.
+- Far mode, the new default: one metric per page (GPU, GPU PWR, GPU TEMP,
+  LLM, MODEL, MEMORY, CPU), sized from an eye chart read on the board at
+  2 m. GPU PWR, GPU TEMP and MEMORY are too wide for 100 px capitals and
+  use 81 px.
   Words have 100 px capitals, values 141 px digits (109 px for 4 or more
   characters), units 81 px capitals, and names 100 px capitals when they
   fit, else 81 px. The metric's level fill,

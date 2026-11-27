@@ -14,8 +14,8 @@ const char *far_page_name(far_page_t p)
 {
     switch (p) {
     case FAR_GPU: return "GPU";
-    case FAR_POWER: return "POWER";
-    case FAR_TEMP: return "TEMP";
+    case FAR_POWER: return "GPU PWR";
+    case FAR_TEMP: return "GPU TEMP";
     case FAR_LLM: return "LLM";
     case FAR_MODEL: return "MODEL";
     case FAR_MEMORY: return "MEMORY";

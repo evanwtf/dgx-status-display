@@ -439,8 +439,8 @@ There is no clock and no page dot: neither is readable from 2 m.
 | Page | Shows |
 | --- | --- |
 | GPU | Usage %, fill to 100 % |
-| POWER | GPU power in W, fill to 240 W |
-| TEMP | GPU °C, blue, then amber from 80 °C, red from 90 °C; fill from 20 to 100 °C |
+| GPU PWR | GPU power in W, fill to 240 W |
+| GPU TEMP | GPU °C, blue, then amber from 80 °C, red from 90 °C; fill from 20 to 100 °C |
 | LLM | Output tok/s or k tok/s, no fill. Only while an engine is up. |
 | MODEL | The first engine's model, without the `org/` part, and `+N` for N more engines. With no engine up, RUNNING and the GPU's backend (`vllm`, `llama.cpp`). Hidden when no engine is up and the GPU is idle or unknown. A long name takes two lines and ends in `...` if it still does not fit. A character outside ASCII shows as `?`. |
 | MEMORY | GiB used, `/ 128 GIB` as the unit, fill to the total |

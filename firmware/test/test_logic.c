@@ -1888,7 +1888,7 @@ static void test_far_pages(void)
     CHECK(t.slot == 3 && far_big_digits(&t) && !t.is_text);
     CHECK(t.hue == HUE_TEAL && t.fill == 0.0f && t.hist == HIST_GPU_PCT);
     far_page(FAR_POWER, &f, &t);
-    CHECK_STR(t.word, "POWER");
+    CHECK_STR(t.word, "GPU PWR");
     CHECK_STR(t.value, "4");
     CHECK_STR(t.unit, "W");
     CHECK(t.hue == HUE_INDIGO && t.hist == HIST_GPU_W);

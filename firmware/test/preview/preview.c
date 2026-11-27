@@ -604,7 +604,10 @@ int main(int argc, char **argv)
                 snprintf(name, sizeof(name), "far-%s-%d-%s", state_name[st], p,
                          far_page_name((far_page_t)p));
                 for (char *ch = name; *ch; ch++) {
-                    *ch = (char)(*ch >= 'A' && *ch <= 'Z' ? *ch - 'A' + 'a' : *ch);
+                    /* "GPU TEMP" -> "gpu-temp": no spaces in file names. */
+                    *ch = (char)(*ch >= 'A' && *ch <= 'Z' ? *ch - 'A' + 'a'
+                                 : *ch == ' '           ? '-'
+                                                        : *ch);
                 }
                 if (far_hidden((far_page_t)p, states[st])) {
                     printf("%s: hidden\n", name);
