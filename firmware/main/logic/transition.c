@@ -11,16 +11,36 @@ void transition_init(transition_t *t, const carousel_t *c)
     };
 }
 
+/* The exact rise needs 255.5 * T^6 < 2^64 (the target, plus half the
+ * denominator for the rounding), so T <= 645 ms. 640 keeps a margin. A
+ * longer `total` is scaled down to that range first, for both curves. */
+#define FADE_EXACT_MAX_MS 640u
+
 uint8_t fade_level(uint8_t target, uint32_t elapsed, uint32_t total, bool rising)
 {
     if (total == 0 || elapsed >= total) {
         return rising ? target : 0;
     }
-    /* p = visible fraction in ms of `total`; level = target * (p/total)^2,
-     * rounded half up, in integers. */
-    const uint64_t p = rising ? elapsed : total - elapsed;
-    const uint64_t den = (uint64_t)total * total;
-    return (uint8_t)(((uint64_t)target * p * p + den / 2) / den);
+    uint64_t e = elapsed;
+    uint64_t t = total;
+    while (t > FADE_EXACT_MAX_MS) {
+        e >>= 1;
+        t >>= 1;
+    }
+    if (!rising) {
+        /* p = lit fraction in ms of `t`; level = target * (p/t)^2, rounded
+         * half up, in integers. */
+        const uint64_t p = t - e;
+        const uint64_t den = t * t;
+        return (uint8_t)(((uint64_t)target * p * p + den / 2) / den);
+    }
+    /* x = e/t, s = x^2 (3 - 2x) = e^2 (3t - 2e) / t^3, level = target * s^2,
+     * rounded half up. With n = e^2 (3t - 2e) and d = t^3: n <= d, and
+     * target * n^2 + d^2/2 < 2^64 while t <= FADE_EXACT_MAX_MS. */
+    const uint64_t n = e * e * (3 * t - 2 * e);
+    const uint64_t d = t * t * t;
+    const uint64_t d2 = d * d;
+    return (uint8_t)(((uint64_t)target * n * n + d2 / 2) / d2);
 }
 
 bool transition_busy(const transition_t *t)
@@ -100,6 +120,7 @@ tr_out_t transition_tick(transition_t *t, carousel_t *c, uint8_t target, int64_t
         t->turn = false;
         t->mode = false;
         out.swap = true;
+        out.render = true;
         return out;
     }
     if (want == VIEW_NO_DATA) {
@@ -108,16 +129,19 @@ tr_out_t transition_tick(transition_t *t, carousel_t *c, uint8_t target, int64_t
             t->mode = false;
             out.swap = true;
         }
+        out.render = true;
         return out;
     }
 
     if (t->phase == TR_IDLE) {
         if (!differs(t, c) && !t->turn) {
+            out.render = true;
             return out;
         }
         t->phase = TR_OUT;
         t->since_ms = now;
         t->out_start_ms = now;
+        out.started = true;
     }
     const uint32_t e = now - t->since_ms; /* wraps cleanly */
     switch (t->phase) {
@@ -132,6 +156,7 @@ tr_out_t transition_tick(transition_t *t, carousel_t *c, uint8_t target, int64_t
         show_now(t, c); /* hidden pages were skipped by the carousel already */
         out.level = 0;
         out.swap = true;
+        out.render = true;
         return out;
     case TR_IN:
         if (e < FADE_IN_MS) {
@@ -145,6 +170,7 @@ tr_out_t transition_tick(transition_t *t, carousel_t *c, uint8_t target, int64_t
             t->queued = TR_ACT_NONE;
         }
         out.done = true;
+        out.render = true; /* the newest data, held back during the fade */
         /* The dwell (or the detail timeout) starts now. */
         c->page_since_ms = now_ms;
         if (c->detail) {

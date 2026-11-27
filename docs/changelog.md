@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Firmware: the fade-in now takes 500 ms (was 150 ms), on an ease-in-out
+  curve. The new page came on like a step; light that comes on is more
+  noticeable than light that goes off. The fade-out is unchanged at
+  150 ms. The view takes no new data while a fade runs, and fill
+  animations stop when a fade starts. The new page draws at the dark
+  moment, and new data shows when the fade-in ends.
+
 ## 0.0.4 (2026-11-27)
 
 Far mode: one metric per page, in text large enough to read from 2 m.

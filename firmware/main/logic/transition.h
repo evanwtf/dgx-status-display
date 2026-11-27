@@ -8,9 +8,16 @@
  *         -> the next dwell starts when the fade-in ends.
  *
  * The fade uses the panel brightness, not LVGL opacity, so the redraw at 0
- * is never seen half done. The level follows a quadratic curve (the eye
- * reads brightness roughly as a power law, so a linear ramp looks fast at
- * the bottom and slow at the top).
+ * is never seen half done. The eye reads brightness roughly as a power law,
+ * so a linear ramp looks fast at the bottom and slow at the top. The two
+ * curves (x = elapsed / total):
+ *
+ * - Fade out: level = target * (1 - x)^2. A quick, plain fall.
+ * - Fade in: s = x^2 (3 - 2x) (smoothstep), level = target * s^2. It is
+ *   ease-in-out in perceived brightness, and it is longer than the fade
+ *   out. Light that comes on is more noticeable than light that goes off,
+ *   so a short or steep rise looks like a step, mostly to the side of the
+ *   eye. The first steps stay at 0 or 1, and the end eases into the target.
  *
  * - The target level is read on every step, so an idle dim during a fade
  *   ends the fade at the new level.
@@ -63,12 +70,21 @@ typedef struct {
      * calls transition_swapped(). */
     bool swap;
     bool done; /* a fade-in ended on this step */
+    bool started; /* a fade-out started on this step: stop the fill animations */
+    /* Draw the shown view with the newest data now: on swap, on done, and
+     * while idle. False while a fade runs otherwise: a redraw then blocks
+     * the FADE_STEP_MS fade timer, so the brightness stalls, then jumps. */
+    bool render;
 } tr_out_t;
 
 void transition_init(transition_t *t, const carousel_t *c);
 
 /* The brightness on the curve: `elapsed` of `total` ms towards `target`
- * when rising, or away from it when falling. Exact at both ends. */
+ * when rising (smoothstep squared), or away from it when falling
+ * (quadratic). Integer math, rounded half up, no overflow for any `total`.
+ * Exact at both ends and monotonic for every `total`. Every value is exact
+ * for `total` <= 640 ms; a longer `total` is scaled down to that range, so
+ * the values between the ends can drift by up to 2 levels. */
 uint8_t fade_level(uint8_t target, uint32_t elapsed, uint32_t total, bool rising);
 
 bool transition_busy(const transition_t *t);

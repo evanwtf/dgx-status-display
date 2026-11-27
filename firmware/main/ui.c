@@ -1,6 +1,7 @@
 /*
  * The UI loop: ESP-IDF glue around view.c. Every UI_PERIOD_MS it reads the
- * serial state, steps the carousel, applies burn-in care and redraws.
+ * serial state, steps the carousel, applies burn-in care and, outside a
+ * fade, redraws.
  */
 #include "ui.h"
 
@@ -240,17 +241,30 @@ static void set_brightness(uint8_t level)
 }
 
 /* One fade step: from tick(), touch, KEY, and every FADE_STEP_MS from the
- * fade timer while a transition runs. All in the LVGL task. */
+ * fade timer while a transition runs. All in the LVGL task. It renders only
+ * when o.render says so (transition.h): never while a fade runs, except at
+ * the dark moment and when the fade-in ends. A render while idle from a
+ * touch handler is the same render tick() does; it sets only what changed. */
 static void transition_step(int64_t now)
 {
     const uint8_t target = burnin_brightness(s_link, now - s_last_change_ms);
     const tr_out_t o = transition_tick(&s_tr, &s_carousel, target, now);
+    if (o.started) {
+        /* A fill animation redraws on every frame, which blocks the fade
+         * timer. The fill stays where it is until the next render. */
+        view_stop_animations();
+    }
     set_brightness(o.level);
     if (o.swap) {
         s_mode_shown = s_mode;
         apply_turn();
         apply_shift(now);
+        /* No animation from the swap: after a rotation or a mode switch the
+         * page id is the same, and a fill animation would run through the
+         * fade-in. */
+        view_set_animations(false);
         render(now);
+        view_set_animations(true);
         if (s_tr.phase == TR_DARK) {
             /* The panel is at 0: draw the whole new view now, so no partly
              * drawn frame is ever lit. */
@@ -260,6 +274,9 @@ static void transition_step(int64_t now)
             s_redraw_ms = (uint32_t)((esp_timer_get_time() - t0) / 1000);
             transition_swapped(&s_tr, (uint32_t)now_ms());
         }
+    } else if (o.render) {
+        /* Idle, or the fade-in ended: the newest data, animations on. */
+        render(now);
     }
     if (o.done && !s_fade_logged) {
         s_fade_logged = true;
@@ -268,7 +285,10 @@ static void transition_step(int64_t now)
                  FADE_IN_MS);
     }
     if (s_fade_timer) {
-        if (transition_busy(&s_tr)) {
+        /* One more step after done: a tap queued during the fade has moved
+         * the carousel, and that step starts its fade-out 10 ms later, not
+         * at the next tick(). */
+        if (transition_busy(&s_tr) || o.done) {
             lv_timer_resume(s_fade_timer);
         } else {
             lv_timer_pause(s_fade_timer);
@@ -318,8 +338,10 @@ static void tick(lv_timer_t *t)
         snprintf(s_last_occ, sizeof(s_last_occ), "%s", s_rx.frame.occ);
         s_last_change_ms = now;
     }
+    /* Renders unless a fade runs (tr_out_t.render): a new frame then makes
+     * LVGL redraw (up to ~126 ms for a far-mode level fill), which blocks
+     * the FADE_STEP_MS fade timer, so the brightness stalls, then jumps. */
     transition_step(now);
-    render(now);
 }
 
 /* Draw the view the panel shows, which lags the carousel during a fade. */

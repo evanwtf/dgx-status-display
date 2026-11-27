@@ -36,6 +36,8 @@
 #define OUTER_R (VIEW_PANEL_CORNER_R - MARGIN) /* 40 */
 #define EDGE_H 3
 #define FILL_ANIM_MS 400
+/* fill_px after view_stop_animations(): the next render sets the height. */
+#define FILL_UNKNOWN (-2)
 
 static lv_obj_t *s_root;
 static lv_obj_t *s_pages; /* the four tiles and the strip */
@@ -55,7 +57,7 @@ typedef struct {
     tier_t tier;
     bool is_text;
     int hue;     /* -1 before the first render */
-    int fill_px; /* the fill's target height; -1 = hidden */
+    int fill_px; /* the fill's target height; -1 = hidden, FILL_UNKNOWN */
     /* History chart: column heights (-1 = gap) and its colors. */
     lv_obj_t *chart;
     int16_t cols[HIST_LEN];
@@ -76,7 +78,7 @@ static lv_obj_t *s_far;
 static lv_obj_t *s_f_bg, *s_f_fill, *s_f_chart;
 static lv_obj_t *s_f_word, *s_f_value, *s_f_unit, *s_f_name[2];
 static int s_f_hue = -1;
-static int s_f_fill_px = -1;
+static int s_f_fill_px = -1; /* as tile_view_t.fill_px */
 static int s_f_last_page = -1;
 static int16_t s_f_cols[HIST_LEN];
 static uint32_t s_f_chart_fill, s_f_chart_line;
@@ -587,6 +589,23 @@ void view_init(lv_obj_t *screen, view_cb_t on_tap, view_cb_t on_long_press,
 void view_set_animations(bool on)
 {
     s_animate = on;
+}
+
+static void fill_height_cb(void *obj, int32_t h);
+
+void view_stop_animations(void)
+{
+    /* lv_anim_delete() leaves the height where the animation was. The
+     * target is then unknown, so the next render sets the height at once
+     * (or hides the fill), without a new animation. */
+    for (int i = 0; i < TILES_PER_PAGE; i++) {
+        if (lv_anim_delete(s_tile[i].fill, fill_height_cb)) {
+            s_tile[i].fill_px = FILL_UNKNOWN;
+        }
+    }
+    if (lv_anim_delete(s_f_fill, fill_height_cb)) {
+        s_f_fill_px = FILL_UNKNOWN;
+    }
 }
 
 void view_model_fill(view_model_t *m, const status_frame_t *f, link_state_t st,

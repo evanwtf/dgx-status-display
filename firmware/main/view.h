@@ -65,6 +65,11 @@ void view_render(const view_model_t *m);
  * preview turns it off: its clock does not run. */
 void view_set_animations(bool on);
 
+/* Stop every running fill animation. A fill keeps its current height, and
+ * the next render sets the new height at once. Call it when a fade starts:
+ * an animation redraws the fill on every frame, which blocks the fade. */
+void view_stop_animations(void);
+
 /* Move the whole layout (burn-in pixel shift). */
 void view_set_shift(int dx, int dy);
 

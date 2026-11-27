@@ -767,18 +767,158 @@ static void test_fade_curve(void)
         CHECK(fade_level(g, 0, FADE_IN_MS, true) == 0);
         CHECK(fade_level(g, FADE_IN_MS, FADE_IN_MS, true) == g);
         CHECK(fade_level(g, FADE_IN_MS + 50, FADE_IN_MS, true) == g);
-        uint8_t prev_out = g, prev_in = 0;
+        uint8_t prev = g;
         for (uint32_t e = 1; e <= FADE_OUT_MS; e++) {
             const uint8_t lo = fade_level(g, e, FADE_OUT_MS, false);
+            CHECK(lo <= prev);
+            prev = lo;
+        }
+        prev = 0;
+        for (uint32_t e = 1; e <= FADE_IN_MS; e++) {
             const uint8_t hi = fade_level(g, e, FADE_IN_MS, true);
-            CHECK(lo <= prev_out && hi >= prev_in);
-            prev_out = lo;
-            prev_in = hi;
+            CHECK(hi >= prev && hi <= g);
+            prev = hi;
         }
     }
-    /* Quadratic: half way in time is a quarter of the level. */
-    CHECK(fade_level(BRIGHTNESS_LIVE, 75, 150, true) == 28); /* 110/4 = 27.5 */
-    CHECK(fade_level(BRIGHTNESS_LIVE, 75, 150, false) == 28);
+    /* Fade out, quadratic: half way in time is a quarter of the level. */
+    CHECK(fade_level(BRIGHTNESS_LIVE, FADE_OUT_MS / 2, FADE_OUT_MS, false) == 28); /* 27.5 */
+
+    /* Fade in, smoothstep squared. x = e/T, s = x^2 (3 - 2x), 110 * s^2:
+     *   x = 0:    0
+     *   x = 1/4:  s = 0.15625,  s^2 = 0.0244140625, 110 s^2 =   2.6855 ->   3
+     *   x = 1/2:  s = 0.5,      s^2 = 0.25,         110 s^2 =  27.5    ->  28
+     *   x = 3/4:  s = 0.84375,  s^2 = 0.7119140625, 110 s^2 =  78.3105 ->  78
+     *   x = 1:    110 */
+    CHECK(fade_level(BRIGHTNESS_LIVE, 0, FADE_IN_MS, true) == 0);
+    CHECK(fade_level(BRIGHTNESS_LIVE, FADE_IN_MS / 4, FADE_IN_MS, true) == 3);
+    CHECK(fade_level(BRIGHTNESS_LIVE, FADE_IN_MS / 2, FADE_IN_MS, true) == 28);
+    CHECK(fade_level(BRIGHTNESS_LIVE, FADE_IN_MS * 3 / 4, FADE_IN_MS, true) == 78);
+    CHECK(fade_level(BRIGHTNESS_LIVE, FADE_IN_MS, FADE_IN_MS, true) == BRIGHTNESS_LIVE);
+    /* Near black, the first steps stay at 0 or 1: x = 1/5 gives
+     * s = 0.104, 110 s^2 = 1.19 -> 1. */
+    for (uint32_t e = 0; e <= FADE_IN_MS / 5; e += FADE_STEP_MS) {
+        CHECK(fade_level(BRIGHTNESS_LIVE, e, FADE_IN_MS, true) <= 1);
+    }
+    CHECK(fade_level(BRIGHTNESS_LIVE, FADE_STEP_MS, FADE_IN_MS, true) == 0);
+}
+
+/* The rise in integers: no overflow at target 255, within half a level of
+ * the real curve, and still exact at the ends for a long `total`. */
+static void test_fade_rise_overflow(void)
+{
+    const uint32_t totals[] = {FADE_IN_MS, 640, 641, 1000, 60000, UINT32_MAX};
+    for (size_t k = 0; k < sizeof(totals) / sizeof(totals[0]); k++) {
+        const uint32_t tt = totals[k];
+        CHECK(fade_level(255, 0, tt, true) == 0);
+        CHECK(fade_level(255, tt, tt, true) == 255);
+        CHECK(fade_level(255, tt - 1, tt, true) >= 254);
+        CHECK(fade_level(255, 0, tt, false) == 255);
+        CHECK(fade_level(255, tt, tt, false) == 0);
+        CHECK(fade_level(255, tt - 1, tt, false) <= 1);
+        uint8_t prev = 0, prev_out = 255;
+        const uint64_t stride = tt / 4096 + 1;
+        for (uint64_t e = 0; e < tt; e += stride) { /* 64 bits: no wrap */
+            const uint8_t v = fade_level(255, (uint32_t)e, tt, true);
+            const uint8_t w = fade_level(255, (uint32_t)e, tt, false);
+            CHECK(v >= prev && w <= prev_out);
+            prev = v;
+            prev_out = w;
+        }
+    }
+    /* Every total up to 2000 ms, both curves: ends exact, monotonic. A
+     * wrong FADE_EXACT_MAX_MS overflows here. */
+    for (uint32_t tt = 1; tt <= 2000; tt++) {
+        CHECK(fade_level(255, 0, tt, true) == 0 && fade_level(255, tt, tt, true) == 255);
+        CHECK(fade_level(255, 0, tt, false) == 255 && fade_level(255, tt, tt, false) == 0);
+        uint8_t up = 0, down = 255;
+        for (uint32_t e = 1; e <= tt; e++) {
+            const uint8_t u = fade_level(255, e, tt, true);
+            const uint8_t d = fade_level(255, e, tt, false);
+            if (u < up || d > down) {
+                CHECK(u >= up && d <= down);
+                break;
+            }
+            up = u;
+            down = d;
+        }
+    }
+    /* Half way: s = 1/2, 255/4 = 63.75 -> 64. */
+    CHECK(fade_level(255, FADE_IN_MS / 2, FADE_IN_MS, true) == 64);
+    CHECK(fade_level(255, 320, 640, true) == 64);
+    /* At FADE_IN_MS, every ms against the real curve. */
+    for (uint32_t e = 0; e <= FADE_IN_MS; e++) {
+        const double x = (double)e / FADE_IN_MS;
+        const double sm = x * x * (3.0 - 2.0 * x);
+        const double want = 255.0 * sm * sm;
+        const double got = fade_level(255, e, FADE_IN_MS, true);
+        CHECK(got - want <= 0.5 + 1e-9 && want - got <= 0.5 + 1e-9);
+    }
+}
+
+/* The flags for ui.c: `started` once per fade, `render` only while idle, at
+ * the swap and at done. */
+static void test_fade_render_flags(void)
+{
+    carousel_t c;
+    transition_t t;
+    live_start(&c, &t, 0);
+    tr_out_t o = step(&c, &t, 250, BRIGHTNESS_LIVE);
+    CHECK(o.render && !o.started && !o.swap && !o.done); /* idle */
+    int started = 0, renders = 0, swaps = 0, dones = 0;
+    transition_tap(&t, &c, 1000);
+    int64_t now = 1000;
+    o = step(&c, &t, now, BRIGHTNESS_LIVE);
+    CHECK(o.started && !o.render && t.phase == TR_OUT);
+    for (;;) {
+        started += o.started;
+        renders += o.render;
+        swaps += o.swap;
+        dones += o.done;
+        if (t.phase == TR_OUT || t.phase == TR_IN) {
+            CHECK(!o.render || o.done || o.swap);
+        }
+        if (o.swap) {
+            CHECK(o.render && t.phase == TR_DARK);
+            transition_swapped(&t, (uint32_t)(now + 30));
+            now += 30;
+        }
+        if (o.done) {
+            CHECK(o.render && !transition_busy(&t));
+            break;
+        }
+        now += FADE_STEP_MS;
+        o = step(&c, &t, now, BRIGHTNESS_LIVE);
+        if (!o.swap && !o.done) {
+            CHECK(!o.render && !o.started); /* OUT and IN */
+        }
+    }
+    CHECK(started == 1 && swaps == 1 && dones == 1 && renders == 2);
+    /* Idle again: renders, nothing starts. */
+    o = step(&c, &t, now + FADE_STEP_MS, BRIGHTNESS_LIVE);
+    CHECK(o.render && !o.started && !transition_busy(&t));
+
+    /* A tap queued during the fade: its fade starts on the step after done,
+     * once. */
+    transition_tap(&t, &c, now + 100);
+    o = step(&c, &t, now + 100, BRIGHTNESS_LIVE);
+    CHECK(o.started);
+    transition_tap(&t, &c, now + 110);
+    CHECK(t.queued == TR_ACT_TAP);
+    const int64_t end = run_fade(&c, &t, now + 110, 30);
+    o = step(&c, &t, end + FADE_STEP_MS, BRIGHTNESS_LIVE);
+    CHECK(o.started && !o.render && t.phase == TR_OUT);
+    o = step(&c, &t, end + 2 * FADE_STEP_MS, BRIGHTNESS_LIVE);
+    CHECK(!o.started && !o.render);
+
+    /* NO DATA in and out: a swap with a render, while idle; no start. */
+    carousel_tick(&c, LINK_NO_DATA, end + 10000);
+    o = transition_tick(&t, &c, BRIGHTNESS_NO_DATA, end + 10000);
+    CHECK(o.swap && o.render && !o.started && !transition_busy(&t));
+    o = transition_tick(&t, &c, BRIGHTNESS_NO_DATA, end + 10250);
+    CHECK(o.render && !o.swap && !o.started);
+    carousel_tick(&c, LINK_LIVE, end + 10500);
+    o = transition_tick(&t, &c, BRIGHTNESS_LIVE, end + 10500);
+    CHECK(o.swap && o.render && !o.started && !transition_busy(&t));
 }
 
 static void test_fade_timeline(void)
@@ -813,7 +953,11 @@ static void test_fade_timeline(void)
     prev = 0;
     for (now += FADE_STEP_MS; now < in_start + FADE_IN_MS; now += FADE_STEP_MS) {
         o = step(&c, &t, now, BRIGHTNESS_LIVE);
-        CHECK((o.level > prev || prev == 0) && o.level < BRIGHTNESS_LIVE && !o.done);
+        /* On the curve, never falls, and no step jumps more than 5 levels.
+         * Not done until FADE_IN_MS. */
+        CHECK(o.level ==
+              fade_level(BRIGHTNESS_LIVE, (uint32_t)(now - in_start), FADE_IN_MS, true));
+        CHECK(o.level >= prev && o.level - prev <= 5 && !o.done);
         prev = o.level;
     }
     o = step(&c, &t, now, BRIGHTNESS_LIVE);
@@ -844,9 +988,11 @@ static void test_fade_target_changes(void)
     o = transition_tick(&t, &c, BRIGHTNESS_IDLE, 250);
     CHECK(o.swap);
     transition_swapped(&t, 260);
-    o = transition_tick(&t, &c, BRIGHTNESS_LIVE, 300);
-    CHECK(o.level == fade_level(BRIGHTNESS_LIVE, 40, FADE_IN_MS, true));
-    o = transition_tick(&t, &c, BRIGHTNESS_IDLE, 410);
+    o = transition_tick(&t, &c, BRIGHTNESS_LIVE, 260 + FADE_IN_MS / 2);
+    CHECK(o.level == fade_level(BRIGHTNESS_LIVE, FADE_IN_MS / 2, FADE_IN_MS, true));
+    o = transition_tick(&t, &c, BRIGHTNESS_IDLE, 260 + FADE_IN_MS - 10);
+    CHECK(!o.done && o.level == fade_level(BRIGHTNESS_IDLE, FADE_IN_MS - 10, FADE_IN_MS, true));
+    o = transition_tick(&t, &c, BRIGHTNESS_IDLE, 260 + FADE_IN_MS);
     CHECK(o.done && o.level == BRIGHTNESS_IDLE); /* ends on the new target */
 
     /* NO DATA during a fade: at once, at the NO DATA level, no fade. */
@@ -890,13 +1036,16 @@ static void test_fade_taps(void)
     /* Fade in: still one. */
     transition_tap(&t, &c, 300);
     CHECK(t.queued == TR_ACT_TAP && c.page == PAGE_COOLING);
-    o = step(&c, &t, 410, BRIGHTNESS_LIVE);
+    o = step(&c, &t, 260 + FADE_IN_MS - 1, BRIGHTNESS_LIVE);
+    CHECK(!o.done && c.page == PAGE_COOLING && t.queued == TR_ACT_TAP);
+    o = step(&c, &t, 260 + FADE_IN_MS, BRIGHTNESS_LIVE);
     /* The queued tap runs when the fade-in ends, then fades on its own. */
     CHECK(o.done && c.page == PAGE_HOST && t.queued == TR_ACT_NONE);
     CHECK(t.shown_page == PAGE_COOLING);
-    o = step(&c, &t, 420, BRIGHTNESS_LIVE);
+    const int64_t next = 260 + FADE_IN_MS + FADE_STEP_MS;
+    o = step(&c, &t, next, BRIGHTNESS_LIVE);
     CHECK(t.phase == TR_OUT);
-    const int64_t end = run_fade(&c, &t, 420, 30);
+    const int64_t end = run_fade(&c, &t, next, 30);
     CHECK(t.shown_page == PAGE_HOST && c.page == PAGE_HOST);
     /* Nothing else was queued: the dwell runs. */
     o = step(&c, &t, end + 1000, BRIGHTNESS_LIVE);
@@ -937,11 +1086,11 @@ static void test_fade_skip_and_hide(void)
     tr_out_t o = step(&c, &t, 250, BRIGHTNESS_LIVE);
     CHECK(o.swap && t.shown_page == PAGE_GPU); /* LLM never shows */
     transition_swapped(&t, 260);
-    o = step(&c, &t, 410, BRIGHTNESS_LIVE);
+    o = step(&c, &t, 260 + FADE_IN_MS, BRIGHTNESS_LIVE);
     CHECK(o.done && !transition_busy(&t));
 
     /* Hidden while it fades in: one more fade, to the next page. */
-    carousel_set_hidden(&c, PAGE_LLM, false, 500);
+    carousel_set_hidden(&c, PAGE_LLM, false, 900);
     c.page = PAGE_STORAGE;
     t.shown_page = PAGE_STORAGE;
     transition_tap(&t, &c, 1000);
@@ -970,13 +1119,14 @@ static void test_fade_turn(void)
     CHECK(o.swap && o.level == 0 && t.turn); /* apply the turn now, at 0 */
     transition_swapped(&t, 260);
     CHECK(!t.turn);
-    o = step(&c, &t, 410, BRIGHTNESS_LIVE);
+    o = step(&c, &t, 260 + FADE_IN_MS, BRIGHTNESS_LIVE);
     CHECK(o.done && t.shown_page == PAGE_GPU);
     /* In NO DATA: at once, nothing to hide. */
-    carousel_tick(&c, LINK_NO_DATA, 500);
-    transition_tick(&t, &c, BRIGHTNESS_NO_DATA, 500);
+    const int64_t nd = 260 + FADE_IN_MS + 100;
+    carousel_tick(&c, LINK_NO_DATA, nd);
+    transition_tick(&t, &c, BRIGHTNESS_NO_DATA, nd);
     transition_turn(&t);
-    o = transition_tick(&t, &c, BRIGHTNESS_NO_DATA, 510);
+    o = transition_tick(&t, &c, BRIGHTNESS_NO_DATA, nd + 10);
     CHECK(o.swap && o.level == BRIGHTNESS_NO_DATA && !t.turn && !transition_busy(&t));
 }
 
@@ -993,10 +1143,11 @@ static void test_fade_clock_wraps(void)
     o = step(&c, &t, base + 250, BRIGHTNESS_LIVE);
     CHECK(o.swap);
     transition_swapped(&t, (uint32_t)(base + 260));
-    o = step(&c, &t, base + 335, BRIGHTNESS_LIVE);
-    CHECK(o.level == fade_level(BRIGHTNESS_LIVE, 75, FADE_IN_MS, true));
-    o = step(&c, &t, base + 410, BRIGHTNESS_LIVE);
-    CHECK(o.done && t.last_ms == 310 && c.page_since_ms == base + 410);
+    o = step(&c, &t, base + 260 + FADE_IN_MS / 2, BRIGHTNESS_LIVE);
+    CHECK(o.level == fade_level(BRIGHTNESS_LIVE, FADE_IN_MS / 2, FADE_IN_MS, true));
+    o = step(&c, &t, base + 260 + FADE_IN_MS, BRIGHTNESS_LIVE);
+    CHECK(o.done && t.last_ms == 160 + FADE_IN_MS);
+    CHECK(c.page_since_ms == base + 260 + FADE_IN_MS);
 }
 
 static void test_report_hello(void)
@@ -2363,6 +2514,8 @@ int main(void)
     test_carousel();
     test_carousel_hidden_pages();
     test_fade_curve();
+    test_fade_rise_overflow();
+    test_fade_render_flags();
     test_fade_timeline();
     test_fade_target_changes();
     test_fade_taps();
