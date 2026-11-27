@@ -49,7 +49,7 @@ service_user = $(strip \
   $(if $(filter-out root,$(SERVICE_USER)),$(SERVICE_USER),$(error SERVICE_USER is "$(SERVICE_USER)". Run make as the account that runs the daemon and not under sudo; make asks for sudo itself)))
 
 .PHONY: help setup check test \
-  fw-test fw-build fw-size fw-preview fw-merge fonts-check \
+  fw-test fw-build fw-size fw-preview fw-merge fonts-check readme-images \
   backup flash flash-merged coredump monitor \
   run dry-run install-service uninstall-service release-check clean
 
@@ -90,6 +90,10 @@ fw-merge: ## Merge the build into one image for 0x0 (after fw-build)
 
 fonts-check: ## Check that the fonts regenerate byte for byte
 	$(UV) python scripts/gen_fonts.py --check
+
+readme-images: ## Render the preview, then write the README images to docs/img/
+	$(FW) preview
+	$(UV) python scripts/readme_images.py
 
 ##@ Board (PORT=...; esptool resets the chip; stop the service first)
 

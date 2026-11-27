@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- README: the far-mode section shows the eight far pages, rendered by the
+  preview. `make readme-images` refreshes them and the near-mode image;
+  `scripts/readme_images.py` (was `readme_image.py`) recompresses them.
 - Far mode, the new default: one metric per page (GPU, GPU PWR, GPU TEMP,
   LLM, MODEL, MEMORY, CPU), sized from an eye chart read on the board at
   2 m. GPU PWR, GPU TEMP and MEMORY are too wide for 100 px capitals and

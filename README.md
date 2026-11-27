@@ -446,6 +446,24 @@ There is no clock and no page dot: neither is readable from 2 m.
 | MEMORY | GiB used, `/ 128 GIB` as the unit, fill to the total |
 | CPU | CPU %, fill to 100 % |
 
+The images below are host renders of the firmware's own drawing code,
+with test data. `make readme-images` makes them again.
+
+<table>
+<tr>
+<td align="center"><img src="docs/img/far-busy-0-gpu.png" width="220" alt="GPU page: 97 %, with a teal fill to 97 % of the screen"><br>GPU</td>
+<td align="center"><img src="docs/img/far-busy-1-gpu-pwr.png" width="220" alt="GPU PWR page: 180 W, with a blue fill to 75 % of the screen"><br>GPU PWR</td>
+<td align="center"><img src="docs/img/far-hot-2-gpu-temp.png" width="220" alt="GPU TEMP page: 92 °C, red because it is above 90 °C"><br>GPU TEMP</td>
+<td align="center"><img src="docs/img/far-busy-3-llm.png" width="220" alt="LLM page: 45.0 TOK/S, with no fill"><br>LLM</td>
+</tr>
+<tr>
+<td align="center"><img src="docs/img/far-busy-4-model.png" width="220" alt="MODEL page: the model name MIMO-V2.6-FLASH on two lines"><br>MODEL</td>
+<td align="center"><img src="docs/img/far-busy-5-memory.png" width="220" alt="MEMORY page: 101.4 / 128 GIB, with a blue fill"><br>MEMORY</td>
+<td align="center"><img src="docs/img/far-busy-6-cpu.png" width="220" alt="CPU page: 63 %, with a teal fill to 63 % of the screen"><br>CPU</td>
+<td align="center"><img src="docs/img/far-no-data.png" width="220" alt="NO DATA screen: 2m 13s since the last frame, and a hint to check that dgx-status is running"><br>NO DATA</td>
+</tr>
+</table>
+
 A missing reading is `—`. While the link is STALE, the value turns amber
 and the fill goes away. With **2-minute history** chosen (detail page), the
 fill becomes the metric's chart across the screen. NO DATA has an 81 px
@@ -515,7 +533,7 @@ make fw-build
 make fw-preview     # render the UI to firmware/preview/*.png
 make fonts-check    # the fonts regenerate byte for byte
 make clean          # remove build outputs; keeps backup/ and firmware/elf/
-uv run python scripts/readme_image.py       # refresh docs/img/pages.png from the preview
+make readme-images  # render the preview, then refresh the images in docs/img/
 ```
 
 The preview compiles the real `view.c` with the same LVGL version and
@@ -538,6 +556,7 @@ checkout, so it works from any directory (`make -C "$REPO" fw-build`).
 | `test` | `uv run --frozen pytest -q -rs` |
 | `fw-test`, `fw-build`, `fw-size`, `fw-preview`, `fw-merge` | `uv run --frozen python scripts/firmware.py test`, `build`, `size`, `preview`, `merge` |
 | `fonts-check` | `uv run --frozen python scripts/gen_fonts.py --check` |
+| `readme-images` | `scripts/firmware.py preview`, then `uv run --frozen python scripts/readme_images.py` |
 | `backup`, `flash`, `flash-merged`, `monitor` | `scripts/firmware.py backup`, `flash`, `merge` then `flash-merged`, `monitor`, each with `--port "$PORT"`; `flash` and `flash-merged` add `--no-backup` with `NO_BACKUP=1` |
 | `coredump` | `scripts/firmware.py coredump --port "$PORT"`, plus `--elf "$ELF"` when set |
 | `run` | `DGX_STATUS_LOG_LEVEL=INFO uv run --frozen dgx-status`, plus `--device "$PORT"` when set (checked like a board target) |

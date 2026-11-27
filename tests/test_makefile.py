@@ -77,6 +77,7 @@ def test_help_lists_every_phony_target_once(tmp_path: Path) -> None:
         "fw-preview",
         "fw-merge",
         "fonts-check",
+        "readme-images",
         *BOARD_TARGETS,
         "run",
         "dry-run",
@@ -212,6 +213,14 @@ def test_run_checks_a_port_when_one_is_set(tmp_path: Path, fake_port: str) -> No
     assert "matches 0 devices" in web.stderr
     good = make(tmp_path, "-n", "run", PORT=fake_port)
     assert f'dgx-status --device "{fake_port}"' in good.stdout
+
+
+def test_readme_images_renders_the_preview_first(tmp_path: Path) -> None:
+    out = make(tmp_path, "-n", "readme-images")
+    assert out.returncode == 0, out.stderr
+    lines = out.stdout.splitlines()
+    assert lines[0].endswith("python scripts/firmware.py preview")
+    assert lines[1].endswith("python scripts/readme_images.py")
 
 
 def test_check_runs_the_tested_script(tmp_path: Path) -> None:
