@@ -1991,7 +1991,23 @@ static void test_far_name_text(void)
     snprintf(f.llm_model, sizeof(f.llm_model), "Qwen/Qwen3-8B, google/gemma-3-4b");
     CHECK(!far_hidden(FAR_MODEL, &f)); /* an engine is up, even with occ idle */
     far_name_text(&f, b, sizeof(b));
-    CHECK_STR(b, "QWEN3-8B, GEMMA-3-4B");
+    CHECK_STR(b, "QWEN3-8B +1"); /* the first model and a count */
+    snprintf(f.llm_model, sizeof(f.llm_model), "a/x, b/y, c/z");
+    far_name_text(&f, b, sizeof(b));
+    CHECK_STR(b, "X +2");
+    /* "org/" alone: a dash, not an empty page. */
+    snprintf(f.llm_model, sizeof(f.llm_model), "Qwen/");
+    far_name_text(&f, b, sizeof(b));
+    CHECK_STR(b, FMT_DASH);
+    /* Non-ASCII: one '?' per character (2-, 3- and 4-byte UTF-8, and a
+     * stray continuation byte). */
+    snprintf(f.llm_model, sizeof(f.llm_model), "org/Mod\xC3\xA8le-\xE2\x82\xAC-\xF0\x9F\x98\x80-\x80x");
+    far_name_text(&f, b, sizeof(b));
+    CHECK_STR(b, "MOD?LE-?-?-?X");
+    /* Spaces at the ends go. */
+    snprintf(f.llm_model, sizeof(f.llm_model), "  org/ tiny  ");
+    far_name_text(&f, b, sizeof(b));
+    CHECK_STR(b, "TINY");
     snprintf(f.llm_model, sizeof(f.llm_model), "a/b/c");
     far_name_text(&f, b, sizeof(b));
     CHECK_STR(b, "C");
@@ -2005,12 +2021,13 @@ static void test_far_name_text(void)
     CHECK_STR(b, FMT_DASH);
 }
 
-/* A fake font: 40 px a character big, 30 px small; '@' only small. */
+/* A fake font: 40 px a character big, 30 px small; '@' only small; '#'
+ * in neither. */
 static int fake_width(const char *s, size_t n, far_name_size_t size, void *ctx)
 {
     (void)ctx;
     for (size_t i = 0; i < n; i++) {
-        if (s[i] == '@' && size == FAR_NAME_BIG) {
+        if ((s[i] == '@' && size == FAR_NAME_BIG) || s[i] == '#') {
             return -1;
         }
     }
@@ -2063,6 +2080,22 @@ static void test_far_name_layout(void)
     far_name_t o;
     far_name_layout("", 400, fake_width, NULL, &o);
     CHECK(o.lines == 1 && o.line[0][0] == '\0');
+    /* Spaces at the ends are dropped. */
+    check_name("  VLLM  ", FAR_NAME_BIG, 1, "VLLM", "");
+    far_name_layout("   ", 400, fake_width, NULL, &o);
+    CHECK(o.lines == 1 && o.line[0][0] == '\0');
+    /* A glyph in neither font ('#'): no line can hold it. */
+    check_name("AB#", FAR_NAME_SMALL, 2, "AB", "...");
+    check_name("ABCDEFGHIJKLMNOPQ#", FAR_NAME_SMALL, 2, "ABCDEFGHIJKLM", "NOPQ...");
+    /* Line two starts with it: the cut shrinks to the dots alone. */
+    check_name("ABCDEFGHIJKL-#BCDEFGHIJKLMNOP", FAR_NAME_SMALL, 2, "ABCDEFGHIJKL-", "...");
+    /* No line one fits at all: one line, the dots alone. */
+    check_name("#ABC", FAR_NAME_SMALL, 1, "...", "");
+    {
+        far_name_t c;
+        far_name_layout("#ABC", 400, fake_width, NULL, &c);
+        CHECK(c.cut);
+    }
     /* 48 characters with no break: cut too. */
     far_name_layout("ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUV", 400, fake_width, NULL,
                     &o);
@@ -2156,6 +2189,155 @@ static void test_far_stale_contrast(void)
     }
 }
 
+static void test_far_page_edges(void)
+{
+    status_frame_t f;
+    status_frame_clear(&f);
+    far_t t;
+    /* Memory used known, total unknown: the value, a dashed total, no fill. */
+    f.mem_used_gib = 7.2f;
+    far_page(FAR_MEMORY, &f, &t);
+    CHECK_STR(t.value, "7.2");
+    CHECK_STR(t.unit, "/ " FMT_DASH " GIB");
+    CHECK(t.fill < 0);
+    /* A negative temperature: shown, cool, fill at the bottom. */
+    f.gpu_c = -5;
+    far_page(FAR_TEMP, &f, &t);
+    CHECK_STR(t.value, "-5");
+    CHECK(t.hue == HUE_COOL && t.fill == 0.0f);
+    /* The thresholds: amber at exactly 80, red at exactly 90. */
+    f.gpu_c = 79.4f;
+    far_page(FAR_TEMP, &f, &t);
+    CHECK(t.hue == HUE_COOL);
+    f.gpu_c = 80;
+    far_page(FAR_TEMP, &f, &t);
+    CHECK(t.tone == TONE_AMBER && t.hue == HUE_WARM);
+    f.gpu_c = 90;
+    far_page(FAR_TEMP, &f, &t);
+    CHECK(t.tone == TONE_RED && t.hue == HUE_HOT);
+    CHECK_NEAR(t.fill, (90.0 - 20.0) / 80.0);
+    /* Power over the 240 W scale: the value, a full fill. */
+    f.gpu_w = 300;
+    far_page(FAR_POWER, &f, &t);
+    CHECK_STR(t.value, "300");
+    CHECK(t.fill == 1.0f);
+    f.gpu_w = 1234; /* too wide for the slot: a true lower bound */
+    far_page(FAR_POWER, &f, &t);
+    CHECK_STR(t.value, ">99");
+}
+
+static void test_carousel_page_count_clamps(void)
+{
+    carousel_t c;
+    carousel_init(&c, 0);
+    carousel_set_page_count(&c, 0, 0);
+    CHECK(c.n_pages == 1);
+    carousel_tick(&c, LINK_LIVE, 0);
+    carousel_tap(&c, 1);
+    CHECK(c.page == PAGE_GPU); /* one page: a tap stays */
+    carousel_set_page_count(&c, -3, 0);
+    CHECK(c.n_pages == 1);
+    carousel_set_page_count(&c, 33, 0);
+    CHECK(c.n_pages == 32);
+    carousel_set_page_count(&c, 1000, 0);
+    CHECK(c.n_pages == 32);
+}
+
+/* BOOT, as ui.c runs it: the carousel resets to the other mode's first
+ * page, and the transition fades. */
+static void boot_press(carousel_t *c, transition_t *t, int n, int64_t now)
+{
+    carousel_set_page_count(c, n, now);
+    transition_mode(t);
+}
+
+static void test_fade_mode_cases(void)
+{
+    carousel_t c;
+    transition_t t;
+    /* From a page other than GPU. */
+    live_start(&c, &t, 0);
+    carousel_tap(&c, 10);
+    tr_out_t o = step(&c, &t, 10, BRIGHTNESS_LIVE);
+    int64_t now = run_fade(&c, &t, 20, 5);
+    CHECK(t.shown_page == PAGE_COOLING);
+    boot_press(&c, &t, FAR_PAGE_COUNT, now + 100);
+    now = run_fade(&c, &t, now + 100, 5);
+    CHECK((int)t.shown_page == FAR_GPU && (int)c.page == FAR_GPU && !t.mode);
+
+    /* A tap queued during the fade is dropped: the new mode opens on its
+     * first page. */
+    boot_press(&c, &t, PAGE_COUNT, now + 100);
+    o = step(&c, &t, now + 100, BRIGHTNESS_LIVE);
+    CHECK(t.phase == TR_OUT);
+    transition_tap(&t, &c, now + 110);
+    CHECK(t.queued == TR_ACT_NONE);
+    now = run_fade(&c, &t, now + 120, 5);
+    CHECK(c.page == PAGE_GPU && t.shown_page == PAGE_GPU);
+    /* A tap queued before BOOT is dropped too. */
+    carousel_tap(&c, now + 10);
+    o = step(&c, &t, now + 10, BRIGHTNESS_LIVE);
+    transition_tap(&t, &c, now + 20);
+    CHECK(t.queued == TR_ACT_TAP);
+    boot_press(&c, &t, FAR_PAGE_COUNT, now + 30);
+    CHECK(t.queued == TR_ACT_NONE);
+    now = run_fade(&c, &t, now + 40, 5);
+    CHECK((int)c.page == FAR_GPU && (int)t.shown_page == FAR_GPU);
+    /* After the switch, taps work again. */
+    transition_tap(&t, &c, now + 1);
+    CHECK((int)c.page == FAR_POWER);
+    now = run_fade(&c, &t, now + 1, 5);
+
+    /* Twice in one fade: back to the first mode, on its first page. */
+    boot_press(&c, &t, PAGE_COUNT, now + 100);
+    o = step(&c, &t, now + 100, BRIGHTNESS_LIVE);
+    boot_press(&c, &t, FAR_PAGE_COUNT, now + 110);
+    now = run_fade(&c, &t, now + 120, 5);
+    CHECK(c.n_pages == FAR_PAGE_COUNT && (int)t.shown_page == FAR_GPU);
+    CHECK(!transition_busy(&t) && !t.turn && !t.mode);
+
+    /* During the fade-in: a second fade follows, then the dwell. */
+    carousel_tap(&c, now + 10);
+    o = step(&c, &t, now + 10, BRIGHTNESS_LIVE);
+    while (!o.swap) {
+        now += FADE_STEP_MS;
+        o = step(&c, &t, now + 10, BRIGHTNESS_LIVE);
+    }
+    transition_swapped(&t, (uint32_t)(now + 10));
+    o = step(&c, &t, now + 20, BRIGHTNESS_LIVE);
+    CHECK(t.phase == TR_IN);
+    boot_press(&c, &t, PAGE_COUNT, now + 20);
+    now += 20;
+    do { /* the fade-in ends */
+        now += FADE_STEP_MS;
+        o = step(&c, &t, now, BRIGHTNESS_LIVE);
+    } while (!o.done);
+    CHECK(t.turn && t.mode && t.phase == TR_IDLE); /* still waiting */
+    now = run_fade(&c, &t, now + 10, 5); /* its own fade */
+    CHECK(c.n_pages == PAGE_COUNT && t.shown_page == PAGE_GPU && !t.turn && !t.mode);
+
+    /* In NO DATA: at once, no fade; frames back on the new mode's page 0. */
+    carousel_tick(&c, LINK_NO_DATA, now + 100);
+    o = transition_tick(&t, &c, BRIGHTNESS_NO_DATA, now + 100);
+    CHECK(o.swap && t.shown_kind == VIEW_NO_DATA);
+    boot_press(&c, &t, FAR_PAGE_COUNT, now + 200);
+    o = transition_tick(&t, &c, BRIGHTNESS_NO_DATA, now + 200);
+    CHECK(o.swap && !transition_busy(&t) && !t.turn && !t.mode);
+    carousel_tick(&c, LINK_LIVE, now + 300);
+    o = transition_tick(&t, &c, BRIGHTNESS_LIVE, now + 300);
+    CHECK(o.swap && t.shown_kind == VIEW_PAGE && (int)t.shown_page == FAR_GPU);
+    (void)o;
+}
+
+static void test_settings_stored(void)
+{
+    fake_store_t fs = {0};
+    settings_store_t st = {fake_load, fake_save, &fs};
+    CHECK(!settings_stored(&st) && !settings_stored(NULL));
+    (void)settings_toggle_mode(&st, MODE_FAR);
+    CHECK(settings_stored(&st));
+}
+
 int main(void)
 {
     test_parse_real_frame();
@@ -2216,6 +2398,10 @@ int main(void)
     test_carousel_far();
     test_far_stale_contrast();
     test_fade_mode_switch();
+    test_far_page_edges();
+    test_carousel_page_count_clamps();
+    test_fade_mode_cases();
+    test_settings_stored();
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }

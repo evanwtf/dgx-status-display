@@ -67,50 +67,69 @@ static void upper(char *s)
     }
 }
 
-/* Copy the comma-separated names in `src`, each without its "org/" part. */
-static void strip_orgs(const char *src, char *buf, size_t cap)
+/* Copy src as ASCII: each non-ASCII UTF-8 sequence becomes one '?'. The
+ * far fonts hold ASCII only. */
+static void ascii_only(const char *src, char *buf, size_t cap)
 {
     size_t n = 0;
-    buf[0] = '\0';
-    const char *item = src;
-    while (*item != '\0' && n + 1 < cap) {
-        const char *end = strchr(item, ',');
-        if (end == NULL) {
-            end = item + strlen(item);
+    for (const unsigned char *c = (const unsigned char *)src; *c != '\0' && n + 1 < cap;) {
+        if (*c < 0x80) {
+            buf[n++] = (char)*c++;
+            continue;
         }
-        const char *start = item;
-        for (const char *c = item; c < end; c++) {
-            if (*c == '/') {
-                start = c + 1;
-            }
+        buf[n++] = '?';
+        c++; /* the lead byte, or a stray continuation byte */
+        while ((*c & 0xC0) == 0x80) {
+            c++;
         }
-        if (start != item) {
-            /* Keep the space after the comma that came before. */
-            while (item < start && *item == ' ' && n + 1 < cap) {
-                buf[n++] = *item++;
-            }
-        }
-        for (const char *c = start; c < end && n + 1 < cap; c++) {
-            buf[n++] = *c;
-        }
-        if (*end == ',' && n + 1 < cap) {
-            buf[n++] = ',';
-            end++;
-        }
-        item = end;
     }
     buf[n] = '\0';
 }
 
+/* s[0, n) without spaces at either end, and without its "org/" part. */
+static void model_name(const char *s, size_t n, char *buf, size_t cap)
+{
+    const char *start = s, *end = s + n;
+    for (const char *c = s; c < end; c++) {
+        if (*c == '/') {
+            start = c + 1;
+        }
+    }
+    while (start < end && *start == ' ') {
+        start++;
+    }
+    while (end > start && end[-1] == ' ') {
+        end--;
+    }
+    snprintf(buf, cap, "%.*s", (int)(end - start), start);
+}
+
 void far_name_text(const status_frame_t *f, char *buf, size_t cap)
 {
+    char name[FAR_TEXT_MAX];
+    name[0] = '\0';
     if (engine_up(f) && f->llm_model[0] != '\0') {
-        strip_orgs(f->llm_model, buf, cap);
+        /* The first model, and "+N" for the N others: two names would not
+         * fit in two lines at 81 px. */
+        const char *m = f->llm_model;
+        const char *comma = strchr(m, ',');
+        model_name(m, comma ? (size_t)(comma - m) : strlen(m), name, sizeof(name));
+        int more = 0;
+        for (const char *c = comma; c != NULL; c = strchr(c + 1, ',')) {
+            more++;
+        }
+        if (name[0] != '\0' && more > 0) {
+            const size_t n = strlen(name);
+            snprintf(name + n, sizeof(name) - n, " +%d", more);
+        }
     } else if (occ_named(f)) {
-        snprintf(buf, cap, "%s", f->occ);
-    } else {
-        snprintf(buf, cap, "%s", FMT_DASH);
+        model_name(f->occ, strlen(f->occ), name, sizeof(name));
     }
+    if (name[0] == '\0') { /* nothing known, or "org/" with no name */
+        snprintf(buf, cap, "%s", FMT_DASH);
+        return;
+    }
+    ascii_only(name, buf, cap);
     upper(buf);
 }
 
@@ -282,8 +301,14 @@ void far_name_layout(const char *name, int max_w, far_width_fn width, void *ctx,
 {
     memset(out, 0, sizeof(*out));
     char s[FAR_TEXT_MAX];
+    while (*name == ' ') {
+        name++;
+    }
     snprintf(s, sizeof(s), "%s", name);
-    const size_t len = strlen(s);
+    size_t len = strlen(s);
+    while (len > 0 && s[len - 1] == ' ') {
+        s[--len] = '\0';
+    }
     out->lines = 1;
     out->size = FAR_NAME_BIG;
     if (len == 0) {
@@ -313,9 +338,22 @@ void far_name_layout(const char *name, int max_w, far_width_fn width, void *ctx,
     for (int cls = 2; cls >= 0 && k == 0; cls--) {
         k = len > 1 ? find_break(s, len, cls, false, width, ctx, FAR_NAME_SMALL, max_w) : 0;
     }
-    if (k == 0) { /* not even one character fits: show what there is */
-        snprintf(out->line[0], sizeof(out->line[0]), "%s", s);
-        out->cut = false;
+    if (k == 0) {
+        /* No break where line one fits: one line, cut with "...". */
+        out->lines = 1;
+        char *l1 = out->line[0];
+        snprintf(l1, sizeof(out->line[0]), "%s", s);
+        size_t m = strlen(l1);
+        if (m > FAR_TEXT_MAX - 1) {
+            m = FAR_TEXT_MAX - 1;
+        }
+        for (; m > 0; m--) {
+            memcpy(l1 + m, "...", 4);
+            if (l1[m - 1] != ' ' && fits(width, ctx, l1, m + 3, FAR_NAME_SMALL, max_w)) {
+                return;
+            }
+        }
+        memcpy(l1, "...", 4);
         return;
     }
     set_lines(out, s, k);

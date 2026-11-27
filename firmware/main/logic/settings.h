@@ -54,5 +54,7 @@ view_mode_t settings_mode(const settings_store_t *s);
 /* Switch to the other mode and store it. Returns the new mode; it applies
  * even when the save fails. */
 view_mode_t settings_toggle_mode(const settings_store_t *s, view_mode_t current);
+/* True when the store holds a value (any value). */
+bool settings_stored(const settings_store_t *s);
 /* "far" or "near", for the log. */
 const char *view_mode_name(view_mode_t m);

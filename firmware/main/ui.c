@@ -107,7 +107,7 @@ static void on_boot_short(void)
 {
     s_mode = settings_toggle_mode(settings_nvs_mode_store(), s_mode);
     carousel_set_page_count(&s_carousel, page_count(s_mode), now_ms());
-    transition_turn(&s_tr); /* the switch waits for the dark moment */
+    transition_mode(&s_tr); /* waits for the dark moment; drops a queued tap */
     s_last_change_ms = now_ms();
     transition_step(now_ms());
     ESP_LOGI(TAG, "mode %s", view_mode_name(s_mode));
@@ -349,7 +349,8 @@ void ui_init(void)
     s_mode = settings_mode(settings_nvs_mode_store()); /* far when none is stored */
     s_mode_shown = s_mode;
     carousel_set_page_count(&s_carousel, page_count(s_mode), now);
-    ESP_LOGI(TAG, "mode %s (stored)", view_mode_name(s_mode));
+    ESP_LOGI(TAG, "mode %s (%s)", view_mode_name(s_mode),
+             settings_stored(settings_nvs_mode_store()) ? "stored" : "default");
     view_init(lv_screen_active(), on_tap, on_long_press, on_chart_toggle);
     lv_display_add_event_cb(lv_display_get_default(), on_refresh_ready, LV_EVENT_REFR_READY,
                             NULL);

@@ -70,3 +70,9 @@ const char *view_mode_name(view_mode_t m)
 {
     return m == MODE_NEAR ? "near" : "far";
 }
+
+bool settings_stored(const settings_store_t *s)
+{
+    uint8_t v = 0;
+    return s != NULL && s->load != NULL && s->load(s->ctx, &v);
+}

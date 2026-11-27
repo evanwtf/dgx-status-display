@@ -13,7 +13,8 @@
  *
  * Each page: the word at the top, the value and its unit, and the
  * metric's level fill across the whole screen. The page uses the same hue
- * and fill scale as the metric's near-mode tile (tiles.c).
+ * and fill scale as the metric's near-mode tile (tiles.c). TEMP also has a
+ * fill, which its near tile lacks: 20 to 100 °C, the history chart's scale.
  */
 #pragma once
 
@@ -71,9 +72,10 @@ void far_page(far_page_t p, const status_frame_t *f, far_t *out);
 /* The 141 px digits (true) or the 109 px digits (false) for this page. */
 bool far_big_digits(const far_t *t);
 
-/* The Model page's name: the engines' models while an engine is up (each
- * without its "org/" prefix), else the GPU occupant. Upper case. A dash
- * when neither is known. */
+/* The Model page's name: the first engine's model while an engine is up,
+ * without its "org/" prefix, and " +N" for N more models; else the GPU
+ * occupant. Upper-case ASCII: each non-ASCII character becomes '?'. A dash
+ * when neither is known, or the model is empty without its "org/". */
 void far_name_text(const status_frame_t *f, char *buf, size_t cap);
 
 /* ---- The name's layout ---- */
@@ -103,7 +105,9 @@ typedef struct {
  * Two lines break after a separator: a space, a comma, '-', '_', '/' or
  * ':'. Only when no such break fits, and only at the small size, after a
  * '.' (it splits a version number), and then anywhere. Of the breaks that
- * fit, the latest wins. A space at the break is dropped.
+ * fit, the latest wins. A space at the break is dropped, and so are spaces
+ * at either end of the name. When no break leaves a line one that fits,
+ * the name is one small line cut with "..." ("..." alone if nothing fits).
  */
 void far_name_layout(const char *name, int max_w, far_width_fn width, void *ctx,
                      far_name_t *out);

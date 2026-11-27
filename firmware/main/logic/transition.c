@@ -30,7 +30,7 @@ bool transition_busy(const transition_t *t)
 
 static void queue(transition_t *t, tr_act_t a)
 {
-    if (t->queued == TR_ACT_NONE) {
+    if (t->queued == TR_ACT_NONE && !t->mode) {
         t->queued = a;
     }
 }
@@ -67,6 +67,13 @@ void transition_turn(transition_t *t)
     t->turn = true;
 }
 
+void transition_mode(transition_t *t)
+{
+    t->turn = true;
+    t->mode = true;
+    t->queued = TR_ACT_NONE;
+}
+
 static bool differs(const transition_t *t, const carousel_t *c)
 {
     const view_kind_t k = carousel_view(c);
@@ -91,12 +98,14 @@ tr_out_t transition_tick(transition_t *t, carousel_t *c, uint8_t target, int64_t
         t->phase = TR_IDLE;
         t->queued = TR_ACT_NONE;
         t->turn = false;
+        t->mode = false;
         out.swap = true;
         return out;
     }
     if (want == VIEW_NO_DATA) {
         if (t->turn) { /* turn at once: there is nothing to hide */
             t->turn = false;
+            t->mode = false;
             out.swap = true;
         }
         return out;
@@ -131,6 +140,10 @@ tr_out_t transition_tick(transition_t *t, carousel_t *c, uint8_t target, int64_t
         }
         t->phase = TR_IDLE;
         t->last_ms = now - t->out_start_ms;
+        if (t->mode && !t->turn) { /* the new mode stays on its first page */
+            t->mode = false;
+            t->queued = TR_ACT_NONE;
+        }
         out.done = true;
         /* The dwell (or the detail timeout) starts now. */
         c->page_since_ms = now_ms;
