@@ -18,7 +18,10 @@ IDLE = "idle"
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("llama.cpp", ("llama-server", "llama-cli", "llama-bench")),
     ("ds4", ("ds4-server",)),
-    ("vllm", ("vllm",)),
+    # vLLM's engine core and workers rename themselves with setproctitle to
+    # "VLLM::EngineCore", "VLLM::Worker_TP0" (VLLM_PROCESS_NAME_PREFIX). That
+    # rewrites cmdline too, so no argument says "vllm" in lower case.
+    ("vllm", ("vllm", "VLLM::")),
     ("ollama", ("ollama",)),
     ("sglang", ("sglang",)),
     ("trt-llm", ("trtllm", "tensorrt_llm")),

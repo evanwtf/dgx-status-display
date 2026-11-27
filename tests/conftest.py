@@ -10,6 +10,9 @@ RDMA and block counters (`sys/`, then `sys_t1/` two seconds later),
 `proc/net/route` (default routes only, gateway zeroed) and `proc/mounts`
 (`/` only).
 
+Added on 2026-11-26: `proc/2507403/`, a vLLM worker on the GPU, renamed by
+setproctitle.
+
 One exception: `proc/4242/` is made by hand. Its comm is cut at 15 bytes in
 the middle of a UTF-8 character, as the kernel can do.
 """

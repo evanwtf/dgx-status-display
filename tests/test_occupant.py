@@ -30,6 +30,10 @@ from dgx_status.occupant import (
             "vllm",
         ),
         ("vllm", ["/venv/bin/vllm", "serve", "Qwen/Qwen3"], "vllm"),
+        # vLLM's engine and workers set their title with setproctitle:
+        # "VLLM::EngineCore", "VLLM::Worker_TP0". The kernel cuts comm at 15.
+        ("VLLM::EngineCor", ["VLLM::EngineCore"], "vllm"),
+        ("VLLM::Worker_TP", ["VLLM::Worker_TP0"], "vllm"),
         ("ollama", ["/usr/local/bin/ollama", "runner", "--model", "/m/blob"], "ollama"),
         ("python3", ["python3", "-m", "sglang.launch_server"], "sglang"),
         ("python", ["python", "main.py", "--listen"], None),
@@ -47,6 +51,19 @@ def test_read_real_ollama_process(proc_root: Path) -> None:
     assert proc.comm == "ollama"
     assert proc.cmdline == ["/usr/local/bin/ollama", "serve"]
     assert backend_for(proc.comm, proc.cmdline) == "ollama"
+
+
+def test_vllm_worker_is_vllm(proc_root: Path) -> None:
+    """A vLLM worker on the GPU, copied from the DGX on 2026-11-26.
+
+    vLLM renames its processes with setproctitle: comm is cut at 15 bytes,
+    and cmdline is overwritten in place and padded with NULs. Before the
+    fix the board showed "VLLM::Worker_TP" in the Running tile."""
+    proc = read_process(proc_root, 2507403)
+    assert proc is not None
+    assert proc.comm == "VLLM::Worker_TP"
+    assert proc.cmdline == ["VLLM::Worker_TP0_EP0"]
+    assert describe_occupant(proc_root, [2507403]) == "vllm"
 
 
 def test_read_missing_process_is_none(proc_root: Path) -> None:

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Daemon: a vLLM engine on the GPU shows as `vllm`. vLLM renames its
+  processes (`VLLM::EngineCore`, `VLLM::Worker_TP0`), so the Running tile
+  showed the cut process title.
+
 ## 0.0.3 (2026-11-26)
 
 - A top-level `Makefile`: `make` lists the targets. Each target calls `uv`
