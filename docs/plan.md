@@ -104,5 +104,5 @@ The tiles are colored and the gutters stay black. Over months, the black
 cross between the tiles could ghost as a faint grid, because those pixels
 rest while the tiles around them work. The 10-pixel orbit moves the cross
 every 3 minutes, which blurs that edge, and the carousel puts a different
-hue in each place every 10 seconds. Check the panel on a full-gray test
+hue in each place every 6 seconds. Check the panel on a full-gray test
 screen every few months.

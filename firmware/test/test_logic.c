@@ -614,7 +614,7 @@ static void test_carousel(void)
     CHECK(carousel_view(&c) == VIEW_PAGE);
     CHECK(c.page == PAGE_GPU);
 
-    /* Advance at 10 s, not before. */
+    /* Advance at CAROUSEL_PAGE_MS, not before. */
     carousel_tick(&c, LINK_LIVE, t0 + CAROUSEL_PAGE_MS - 1);
     CHECK(c.page == PAGE_GPU);
     carousel_tick(&c, LINK_LIVE, t0 + CAROUSEL_PAGE_MS);
@@ -2286,7 +2286,7 @@ static void test_carousel_far(void)
     carousel_set_page_count(&c, FAR_PAGE_COUNT, 100);
     CHECK(c.n_pages == FAR_PAGE_COUNT && (int)c.page == FAR_GPU && c.hidden == 0);
     CHECK(carousel_view(&c) == VIEW_PAGE && c.page_since_ms == 100);
-    /* Seven pages, 10 s each, then round again. */
+    /* Seven pages, one CAROUSEL_PAGE_MS each, then round again. */
     for (int i = 1; i < FAR_PAGE_COUNT; i++) {
         carousel_tick(&c, LINK_LIVE, 100 + (int64_t)i * CAROUSEL_PAGE_MS);
         CHECK((int)c.page == i);

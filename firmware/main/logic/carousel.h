@@ -22,7 +22,7 @@
 #include "link_state.h"
 #include "tiles.h"
 
-#define CAROUSEL_PAGE_MS 10000
+#define CAROUSEL_PAGE_MS 6000
 #define CAROUSEL_DETAIL_MS 20000
 
 typedef enum { VIEW_PAGE = 0, VIEW_DETAIL, VIEW_NO_DATA } view_kind_t;

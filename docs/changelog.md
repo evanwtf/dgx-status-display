@@ -8,6 +8,7 @@
   150 ms. The view takes no new data while a fade runs, and fill
   animations stop when a fade starts. The new page draws at the dark
   moment, and new data shows when the fade-in ends.
+- Firmware: each page shows for 6 s (was 10 s), plus the fade.
 
 ## 0.0.4 (2026-11-27)
 
