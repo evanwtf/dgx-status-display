@@ -16,3 +16,9 @@ LV_FONT_DECLARE(brl_24)      /* printable ASCII, degree sign, em dash */
 LV_FONT_DECLARE(brl_30)      /* the same */
 LV_FONT_DECLARE(brl_32)      /* page titles only */
 LV_FONT_DECLARE(brl_44)      /* "No data from the DGX" only */
+
+/* Far mode (logic/far.h). RLE-compressed (LV_USE_FONT_COMPRESSED). */
+LV_FONT_DECLARE(far_num_187) /* digits . - > and the em dash: 141 px digits */
+LV_FONT_DECLARE(far_num_147) /* the same: 109 px digits */
+LV_FONT_DECLARE(far_brl_140) /* A-Z 0-9 and " -._/,:+": 100 px caps */
+LV_FONT_DECLARE(far_brl_112) /* ASCII less a-z, degree sign, em dash: 81 px caps */

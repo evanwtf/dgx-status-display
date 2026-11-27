@@ -75,6 +75,7 @@ EM_DASH = "0x2014"
 DEGREE = "0xB0"
 DIGITS = "0123456789"
 LOWER = "abcdefghijklmnopqrstuvwxyz"
+UPPER = LOWER.upper()
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,9 @@ class FontSpec:
     symbols: str = ""
     ranges: tuple[str, ...] = ()
     font: str = FONT_FILE
+    # RLE-compressed bitmaps (LV_USE_FONT_COMPRESSED). The far-mode fonts
+    # need it: uncompressed, each file is over the 256 KB commit limit.
+    compress: bool = False
 
     @property
     def monospace(self) -> bool:
@@ -101,7 +105,7 @@ class FontSpec:
             "4",
             "--format",
             "lvgl",
-            "--no-compress",
+            *([] if self.compress else ["--no-compress"]),
             "--lv-include",
             "lvgl.h",
             "--lv-font-name",
@@ -135,6 +139,32 @@ FONTS: tuple[FontSpec, ...] = (
     FontSpec("brl_32", 32, symbols="GPUCoolingHstAl temprauNwkSLM", font=BARLOW_FILE),
     # The NO DATA headline only.
     FontSpec("brl_44", 44, symbols="No data from the DGX", font=BARLOW_FILE),
+    # Far mode (firmware/main/logic/far.h), sized from an eye chart read on
+    # the board at 2 m. Values: 141 px digits at 187, 109 px at 147.
+    FontSpec(
+        "far_num_187", 187, symbols=DIGITS + ".->", ranges=(EM_DASH,), compress=True
+    ),
+    FontSpec(
+        "far_num_147", 147, symbols=DIGITS + ".->", ranges=(EM_DASH,), compress=True
+    ),
+    # Page words and one-line names: 100 px caps. Upper case only.
+    FontSpec(
+        "far_brl_140",
+        140,
+        symbols=UPPER + DIGITS + " -._/,:+",
+        font=BARLOW_FILE,
+        compress=True,
+    ),
+    # Units, wide words, NO DATA and two-line names: 81 px caps. Printable
+    # ASCII less the lower case (names are upper-cased), the degree sign and
+    # the em dash.
+    FontSpec(
+        "far_brl_112",
+        112,
+        ranges=("0x20-0x60", "0x7B-0x7E", DEGREE, EM_DASH),
+        font=BARLOW_FILE,
+        compress=True,
+    ),
 )
 
 

@@ -20,7 +20,11 @@ CONFIG_BT_ENABLED=n
 # LVGL 9: RGB565 and its own heap. The UI's fonts are generated (main/fonts/);
 # Montserrat 14 stays only as LVGL's default font.
 CONFIG_LV_COLOR_DEPTH_16=y
-CONFIG_LV_MEM_SIZE=49152
+# Far mode: a glyph of the 187 px digits needs an A8 buffer of about 16 KB
+# on this heap while it draws.
+CONFIG_LV_MEM_SIZE=98304
+# The far-mode fonts are RLE-compressed (scripts/gen_fonts.py).
+CONFIG_LV_USE_FONT_COMPRESSED=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_USE_LOG=n
 CONFIG_LV_USE_DEMO_WIDGETS=n

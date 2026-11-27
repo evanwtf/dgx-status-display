@@ -80,3 +80,33 @@ def test_title_font_covers_every_page_title() -> None:
     for title in [*titles, "All temperatures", "LLM engines"]:
         missing = set(title) - set(spec.symbols)
         assert not missing, f"{title!r} needs {sorted(missing)} in brl_32"
+
+
+# Far mode: the screen's lit square is 452 px wide (480 less a 14 px margin
+# each side); view.c centers each value slot in it.
+FAR_SQUARE_PX = 452
+
+
+@pytest.mark.parametrize(
+    ("name", "slot"),
+    [("far_num_187", 3), ("far_num_147", 5)],
+)
+def test_far_value_slot_fits_the_screen(name: str, slot: int) -> None:
+    spec = next(s for s in FONTS if s.name == name)
+    assert slot * spec.size * ADVANCE_EM <= FAR_SQUARE_PX
+
+
+def test_far_fonts_cover_every_far_word() -> None:
+    """Each far page word draws in far_brl_140 or, when too wide, in
+    far_brl_112: both fonts need its letters."""
+    root = Path(__file__).resolve().parent.parent
+    far = (root / "firmware/main/logic/far.c").read_text()
+    words = re.findall(r'case FAR_\w+: return "([^"]+)";', far)
+    assert len(words) == 7
+    words += re.findall(r'out->word = "([^"]+)";', far)
+    assert "RUNNING" in words
+    big = next(f for f in FONTS if f.name == "far_brl_140")
+    for word in words:
+        missing = set(word) - set(big.symbols)
+        assert not missing, f"{word!r} needs {sorted(missing)} in far_brl_140"
+        assert word == word.upper()
