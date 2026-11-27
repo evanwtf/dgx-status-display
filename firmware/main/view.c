@@ -134,9 +134,37 @@ static void set_text(lv_obj_t *l, const char *text)
     }
 }
 
+/* Style setters that skip an unchanged value. Setting a local style
+ * property invalidates the object even when the value is the same, and
+ * the UI renders every 250 ms: an unguarded setter redraws the screen. */
 static void set_text_color(lv_obj_t *o, uint32_t color)
 {
-    lv_obj_set_style_text_color(o, lv_color_hex(color), 0);
+    const lv_color_t c = lv_color_hex(color);
+    if (!lv_color_eq(lv_obj_get_style_text_color(o, LV_PART_MAIN), c)) {
+        lv_obj_set_style_text_color(o, c, 0);
+    }
+}
+
+static void set_bg_color(lv_obj_t *o, uint32_t color)
+{
+    const lv_color_t c = lv_color_hex(color);
+    if (!lv_color_eq(lv_obj_get_style_bg_color(o, LV_PART_MAIN), c)) {
+        lv_obj_set_style_bg_color(o, c, 0);
+    }
+}
+
+static void set_font(lv_obj_t *l, const lv_font_t *font)
+{
+    if (lv_obj_get_style_text_font(l, LV_PART_MAIN) != font) {
+        lv_obj_set_style_text_font(l, font, 0);
+    }
+}
+
+static void set_align(lv_obj_t *l, lv_text_align_t align)
+{
+    if (lv_obj_get_style_text_align(l, LV_PART_MAIN) != align) {
+        lv_obj_set_style_text_align(l, align, 0);
+    }
 }
 
 /* Top-left y for a label in `font` whose baseline must sit at `baseline`. */
@@ -451,7 +479,7 @@ static int ink_above_baseline(const lv_font_t *font, uint32_t letter)
 /* Put label l, in font, with its baseline at y (screen). */
 static void place(lv_obj_t *l, const lv_font_t *font, int x, int baseline, int w)
 {
-    lv_obj_set_style_text_font(l, font, 0);
+    set_font(l, font);
     lv_obj_set_pos(l, x, y_for_baseline(font, baseline));
     lv_obj_set_width(l, w);
 }
@@ -665,12 +693,12 @@ static void render_pages(const view_model_t *m)
     set_text(s_clock, m->clock);
     if (m->link == LINK_LIVE) {
         set_text(s_stale, "");
-        lv_obj_set_style_bg_color(s_dot, lv_color_hex(COLOR_DOT_LIVE), 0);
+        set_bg_color(s_dot, COLOR_DOT_LIVE);
     } else {
         char line[40];
         snprintf(line, sizeof(line), "Stale %s", m->age);
         set_text(s_stale, line);
-        lv_obj_set_style_bg_color(s_dot, lv_color_hex(COLOR_STALE), 0);
+        set_bg_color(s_dot, COLOR_STALE);
     }
     bool same_page = s_last_page == (int)m->page;
     for (int i = 0; i < TILES_PER_PAGE; i++) {
@@ -699,13 +727,13 @@ static void render_far_value(const far_t *t)
         const int vb = FAR_BODY_TOP + (body + digit_h) / 2;
         place(s_f_value, vf, x0, vb, slot_w);
         place(s_f_unit, uf, x0 + slot_w + FAR_UNIT_GAP_X, vb, uw + 8);
-        lv_obj_set_style_text_align(s_f_unit, LV_TEXT_ALIGN_LEFT, 0);
+        set_align(s_f_unit, LV_TEXT_ALIGN_LEFT);
     } else {
         const int block = digit_h + FAR_UNIT_GAP_Y + cap_h;
         const int vb = FAR_BODY_TOP + (body - block) / 2 + digit_h;
         place(s_f_value, vf, (W - slot_w) / 2, vb, slot_w);
         place(s_f_unit, uf, FAR_M, vb + FAR_UNIT_GAP_Y + cap_h, FAR_S);
-        lv_obj_set_style_text_align(s_f_unit, LV_TEXT_ALIGN_CENTER, 0);
+        set_align(s_f_unit, LV_TEXT_ALIGN_CENTER);
     }
     set_text(s_f_value, t->value);
     set_text(s_f_unit, t->unit);
@@ -714,8 +742,13 @@ static void render_far_value(const far_t *t)
 /* The name on one or two lines, as large as fits (far_name_layout). */
 static void render_far_name(const far_t *t)
 {
-    far_name_t n;
-    far_name_layout(t->text, FAR_TEXT_W, far_width, NULL, &n);
+    /* The layout measures glyphs: run it only when the name changes. */
+    static char last[FAR_TEXT_MAX] = {1, 0}; /* no name matches it */
+    static far_name_t n;
+    if (strcmp(last, t->text) != 0) {
+        snprintf(last, sizeof(last), "%s", t->text);
+        far_name_layout(t->text, FAR_TEXT_W, far_width, NULL, &n);
+    }
     const lv_font_t *font = far_name_font(n.size);
     const int cap_h = ink_above_baseline(font, 'H');
     const int gap = cap_h * 3 / 10;
@@ -917,4 +950,14 @@ lv_obj_t *view_tile_value(int i)
 lv_obj_t *view_far_value(void)
 {
     return s_f_value;
+}
+
+lv_obj_t *view_far_word(void)
+{
+    return s_f_word;
+}
+
+lv_obj_t *view_far_name(int i)
+{
+    return s_f_name[i];
 }

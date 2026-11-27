@@ -24,6 +24,7 @@
 #include "logic/carousel.h"
 #include "logic/co5300.h"
 #include "logic/far.h"
+#include "logic/palette.h"
 #include "logic/settings.h"
 #include "logic/history.h"
 #include "logic/status.h"
@@ -41,6 +42,7 @@ static uint16_t s_draw[W * DRAW_LINES];
 static uint16_t s_rot[W * DRAW_LINES]; /* the port's draw_buffs[2] */
 static uint16_t s_fb[W * W];           /* the panel */
 static int s_bad_windows;
+static long s_flushed_px; /* pixels flushed since the counter was reset */
 static uint8_t s_rgb[W * W * 3];
 static int s_failed;
 static chart_style_t s_style = CHART_LEVEL;
@@ -134,6 +136,7 @@ static void flush_cb(lv_display_t *d, const lv_area_t *area, uint8_t *px)
         }
         memcpy(&s_fb[y * W + out.x1], &src[(y - out.y1) * ow], (size_t)ow * sizeof(uint16_t));
     }
+    s_flushed_px += (long)ww * hh;
     lv_display_flush_ready(d);
 }
 
@@ -255,6 +258,53 @@ static void add_to_readme(int cell)
     downscale_into(s_readme, README_W, (cell % 2) * (HALF + SEP), (cell / 2) * (HALF + SEP));
 }
 
+static carousel_t on_page(page_id_t p);
+
+static uint16_t rgb565(uint32_t c)
+{
+    return (uint16_t)((((c >> 16) & 0xF8) << 8) | (((c >> 8) & 0xFC) << 3) | ((c & 0xF8) >> 3));
+}
+
+/* Pixels of exactly `color` inside label l's box: full-ink pixels of its
+ * text. Panel at rotation 0 and no shift, so logical = panel. */
+static int text_pixels(lv_obj_t *l, uint32_t color)
+{
+    if (lv_obj_is_hidden(l)) {
+        return 0;
+    }
+    lv_area_t a;
+    lv_obj_get_coords(l, &a);
+    const uint16_t want = rgb565(color);
+    int n = 0;
+    for (int32_t y = a.y1 < 0 ? 0 : a.y1; y <= a.y2 && y < W; y++) {
+        for (int32_t x = a.x1 < 0 ? 0 : a.x1; x <= a.x2 && x < W; x++) {
+            n += s_fb[y * W + x] == want;
+        }
+    }
+    return n;
+}
+
+/* A far page must show its text: blank glyphs (a stale sdkconfig, a
+ * failed glyph buffer) leave a colored square that passes every other
+ * check. */
+#define TEXT_MIN_PX 300
+static void check_far_text(const char *what, const view_model_t *m)
+{
+    if (m->mode != MODE_FAR || m->kind != VIEW_PAGE ||
+        lv_display_get_rotation(lv_display_get_default()) != LV_DISPLAY_ROTATION_0) {
+        return;
+    }
+    const uint32_t ink = m->link == LINK_LIVE ? COLOR_VALUE : COLOR_STALE;
+    const int word = text_pixels(view_far_word(), hue_colors(m->far.hue)->tint);
+    const int value = m->far.is_text ? text_pixels(view_far_name(0), ink)
+                                     : text_pixels(view_far_value(), ink);
+    if (word < TEXT_MIN_PX || value < TEXT_MIN_PX) {
+        fprintf(stderr, "FAIL %s: text pixels word %d, value %d (need %d each)\n", what, word,
+                value, TEXT_MIN_PX);
+        s_failed++;
+    }
+}
+
 static void show(const char *dir, const char *name, const status_frame_t *f, link_state_t st,
                  int64_t age_s, carousel_t c)
 {
@@ -269,8 +319,30 @@ static void show(const char *dir, const char *name, const status_frame_t *f, lin
     m.stack_free_rx = 2400;
     m.stack_free_ui = 3100;
     check_orbit(name, &m);
+    check_far_text(name, &m);
     save(dir, name);
     add_to_sheet();
+}
+
+/* Render a page, then the same model again: the second render must flush
+ * nothing. The UI renders every 250 ms; a setter that invalidates on an
+ * unchanged value redraws the screen each time. */
+static void check_rerender(const char *what, const status_frame_t *f, int page,
+                           view_mode_t mode, link_state_t st)
+{
+    view_model_t m;
+    memset(&m, 0, sizeof(m));
+    carousel_t c = on_page((page_id_t)page);
+    view_model_fill(&m, f, st, 6, &c, mode);
+    m.style = CHART_LEVEL;
+    m.hist_heights = preview_heights;
+    render(&m);
+    s_flushed_px = 0;
+    view_render(&m);
+    lv_refr_now(NULL);
+    printf("%s re-render %-22s flushed %ld px\n", s_flushed_px == 0 ? "ok  " : "FAIL", what,
+           s_flushed_px);
+    s_failed += s_flushed_px != 0;
 }
 
 /*
@@ -690,6 +762,22 @@ int main(int argc, char **argv)
     check_far_column("temp C", FAR_TEMP, &f, &f.gpu_c, 9, 85);
     check_far_column("memory", FAR_MEMORY, &f, &f.mem_used_gib, 7.2f, 101.4f);
     check_far_column("cpu %", FAR_CPU, &f, &f.cpu_pct, 0, 63);
+
+    /* An unchanged model redraws nothing, in either mode. */
+    for (int p = 0; p < FAR_PAGE_COUNT; p++) {
+        char what[40];
+        snprintf(what, sizeof(what), "far %s", far_page_name((far_page_t)p));
+        check_rerender(what, &busy, p, MODE_FAR, LINK_LIVE);
+        snprintf(what, sizeof(what), "far %s stale", far_page_name((far_page_t)p));
+        check_rerender(what, &busy, p, MODE_FAR, LINK_STALE);
+    }
+    for (int p = 0; p < PAGE_COUNT; p++) {
+        char what[40];
+        snprintf(what, sizeof(what), "near %s", page_name((page_id_t)p));
+        check_rerender(what, &busy, p, MODE_NEAR, LINK_LIVE);
+        snprintf(what, sizeof(what), "near %s stale", page_name((page_id_t)p));
+        check_rerender(what, &busy, p, MODE_NEAR, LINK_STALE);
+    }
 
     /* Same LV_MEM_SIZE as the firmware, after every page and the detail
      * page have been drawn. The host is 64-bit, so its pointers and LVGL

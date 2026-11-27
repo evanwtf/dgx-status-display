@@ -70,5 +70,8 @@ void view_set_shift(int dx, int dy);
 
 /* The value label of tile i (0-3). For the alignment test in the preview. */
 lv_obj_t *view_tile_value(int i);
-/* The far-mode value label. For the same test. */
+/* The far-mode labels: value, word, and name line i (0-1). For the
+ * preview's checks. */
 lv_obj_t *view_far_value(void);
+lv_obj_t *view_far_word(void);
+lv_obj_t *view_far_name(int i);
