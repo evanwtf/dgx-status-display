@@ -677,6 +677,76 @@ static void test_carousel(void)
     CHECK(c.page == PAGE_GPU); /* wraps after the sixth page */
 }
 
+/* The dots before a page change: seconds left, rounded up, in the last 3 s. */
+static void test_carousel_countdown(void)
+{
+    carousel_t c;
+    carousel_init(&c, 0);
+    CHECK(carousel_countdown(&c, 0) == 0); /* NO DATA */
+    carousel_tick(&c, LINK_LIVE, 1000);    /* live: page GPU since 1000 */
+    CHECK(c.page == PAGE_GPU && c.page_since_ms == 1000);
+    const int64_t t0 = c.page_since_ms;
+    /* Nothing through the first 3 s. */
+    for (int64_t e = 0; e < CAROUSEL_PAGE_MS - 3000; e += 50) {
+        CHECK(carousel_countdown(&c, t0 + e) == 0);
+    }
+    /* remaining = CAROUSEL_PAGE_MS - elapsed. */
+    const int64_t end = t0 + CAROUSEL_PAGE_MS;
+    CHECK(carousel_countdown(&c, end - 3001) == 0);
+    CHECK(carousel_countdown(&c, end - 3000) == 3);
+    CHECK(carousel_countdown(&c, end - 2001) == 3);
+    CHECK(carousel_countdown(&c, end - 2000) == 2);
+    CHECK(carousel_countdown(&c, end - 1001) == 2);
+    CHECK(carousel_countdown(&c, end - 1000) == 1);
+    CHECK(carousel_countdown(&c, end - 1) == 1);
+    /* 0 at the moment of advance, and the tick moves on then. */
+    CHECK(carousel_countdown(&c, end) == 0);
+    carousel_tick(&c, LINK_LIVE, end - 1);
+    CHECK(c.page == PAGE_GPU);
+    carousel_tick(&c, LINK_LIVE, end);
+    CHECK(c.page == PAGE_COOLING && carousel_countdown(&c, end) == 0);
+    /* A tap restarts the timer. */
+    CHECK(carousel_countdown(&c, end + CAROUSEL_PAGE_MS - 500) == 1);
+    carousel_tap(&c, end + CAROUSEL_PAGE_MS - 500);
+    const int64_t t1 = end + CAROUSEL_PAGE_MS - 500;
+    CHECK(c.page == PAGE_HOST && carousel_countdown(&c, t1) == 0);
+    CHECK(carousel_countdown(&c, t1 + CAROUSEL_PAGE_MS - 2500) == 3);
+    CHECK(carousel_countdown(&c, t1 + CAROUSEL_PAGE_MS - 500) == 1);
+    /* Detail: none, even at the end of the page time. */
+    carousel_long_press(&c, t1 + 100);
+    CHECK(carousel_countdown(&c, t1 + CAROUSEL_PAGE_MS - 500) == 0);
+    carousel_tap(&c, t1 + 200); /* back, fresh timer */
+    CHECK(!c.detail && carousel_countdown(&c, t1 + 200 + CAROUSEL_PAGE_MS - 500) == 1);
+    /* NO DATA: none. */
+    carousel_tick(&c, LINK_NO_DATA, t1 + 300);
+    CHECK(carousel_countdown(&c, t1 + 200 + CAROUSEL_PAGE_MS - 500) == 0);
+
+    /* One visible page: no change comes, so no dots. */
+    carousel_t one;
+    carousel_init(&one, 0);
+    carousel_set_page_count(&one, 1, 0);
+    carousel_tick(&one, LINK_LIVE, 0);
+    CHECK(carousel_countdown(&one, CAROUSEL_PAGE_MS - 500) == 0);
+    carousel_t two;
+    carousel_init(&two, 0);
+    carousel_set_page_count(&two, 2, 0);
+    carousel_tick(&two, LINK_LIVE, 0);
+    CHECK(carousel_countdown(&two, CAROUSEL_PAGE_MS - 500) == 1);
+    carousel_set_hidden(&two, (page_id_t)1, true, 10); /* only GPU left */
+    CHECK(carousel_countdown(&two, CAROUSEL_PAGE_MS - 500) == 0);
+
+    /* A hidden page is skipped: the dots count down to the next visible
+     * one, and the tick lands there. */
+    carousel_t h;
+    carousel_init(&h, 0);
+    carousel_tick(&h, LINK_LIVE, 0);
+    h.page = PAGE_STORAGE;
+    carousel_set_hidden(&h, PAGE_LLM, true, 0);
+    CHECK(carousel_countdown(&h, CAROUSEL_PAGE_MS - 1500) == 2);
+    carousel_tick(&h, LINK_LIVE, CAROUSEL_PAGE_MS);
+    CHECK(h.page == PAGE_GPU && carousel_countdown(&h, CAROUSEL_PAGE_MS) == 0);
+}
+
 static void test_carousel_hidden_pages(void)
 {
     carousel_t c;
@@ -1148,6 +1218,135 @@ static void test_fade_clock_wraps(void)
     o = step(&c, &t, base + 260 + FADE_IN_MS, BRIGHTNESS_LIVE);
     CHECK(o.done && t.last_ms == 160 + FADE_IN_MS);
     CHECK(c.page_since_ms == base + 260 + FADE_IN_MS);
+}
+
+/* The UI tick lands on the 250 ms grid of the page timer. */
+static void test_carousel_tick_delay(void)
+{
+    carousel_t c;
+    carousel_init(&c, 0);
+    CHECK(carousel_tick_delay(&c, 1234, 250) == 250); /* NO DATA */
+    carousel_tick(&c, LINK_LIVE, 1000);
+    CHECK(c.page_since_ms == 1000);
+    CHECK(carousel_tick_delay(&c, 1000, 250) == 250); /* remainder 0 */
+    CHECK(carousel_tick_delay(&c, 1001, 250) == 249);
+    CHECK(carousel_tick_delay(&c, 1249, 250) == 1);
+    CHECK(carousel_tick_delay(&c, 1250, 250) == 250);
+    CHECK(carousel_tick_delay(&c, 1000 + 5750 + 40, 250) == 210); /* a late tick */
+    CHECK(carousel_tick_delay(&c, 999, 250) == 250);  /* now before the timer */
+    CHECK(carousel_tick_delay(&c, -5000, 250) == 250);
+    for (int64_t now = 1000; now < 9000; now += 7) {
+        const int d = carousel_tick_delay(&c, now, 250);
+        CHECK(d >= 1 && d <= 250 && (now + d - 1000) % 250 == 0);
+    }
+    carousel_long_press(&c, 1100); /* detail */
+    CHECK(carousel_tick_delay(&c, 1101, 250) == 250);
+    carousel_tap(&c, 1200);
+    CHECK(carousel_tick_delay(&c, 1201, 250) == 249);
+}
+
+/* The countdown as ui.c draws it: transition_countdown() on a render. */
+typedef struct {
+    int renders, swaps, dones, timed_moves;
+    int last_cd;      /* the countdown of the last render */
+    int max_cd;
+    bool turning;     /* the running fade is a rotation's */
+    int64_t quiet_until; /* no dots may render before this */
+} cd_sim_t;
+
+static void cd_step(cd_sim_t *s, carousel_t *c, transition_t *t, int64_t now,
+                    int64_t *next_fade)
+{
+    const tr_out_t o = transition_tick(t, c, BRIGHTNESS_LIVE, now);
+    if (o.started) {
+        if (!s->turning) {
+            CHECK(s->last_cd == 1); /* the last dot showed before the move */
+            s->timed_moves++;
+        }
+    }
+    if (o.render) {
+        const int cd = transition_countdown(t, c, now);
+        s->renders++;
+        if (o.swap || o.done) {
+            CHECK(cd == 0);
+        }
+        if (now < s->quiet_until) {
+            CHECK(cd == 0);
+        }
+        s->last_cd = cd;
+        s->max_cd = cd > s->max_cd ? cd : s->max_cd;
+    }
+    if (o.swap) {
+        s->swaps++;
+        CHECK(t->phase == TR_DARK);
+        transition_swapped(t, (uint32_t)now);
+    }
+    if (o.done) {
+        s->dones++;
+        if (s->turning) {
+            s->turning = false;
+            s->quiet_until = now + CAROUSEL_PAGE_MS - 3000;
+        }
+    }
+    *next_fade = transition_busy(t) || o.done ? now + FADE_STEP_MS : -1;
+}
+
+/* Carousel and transition together, ticks on the page grid, the fade timer
+ * at FADE_STEP_MS: three timed moves, then a rotation while dots show. */
+static void test_countdown_cycles(void)
+{
+    carousel_t c;
+    transition_t t;
+    live_start(&c, &t, 0);
+    cd_sim_t s = {0};
+    int64_t next_tick = 250, next_fade = -1;
+    bool turned = false;
+    for (int64_t now = 1; now < 40000; now++) {
+        if (now == next_fade) {
+            cd_step(&s, &c, &t, now, &next_fade);
+        }
+        if (now == next_tick) {
+            carousel_tick(&c, LINK_LIVE, now);
+            cd_step(&s, &c, &t, now, &next_fade);
+            next_tick = now + carousel_tick_delay(&c, now, 250);
+        }
+        if (!turned && s.timed_moves >= 3 && s.last_cd == 3 && !transition_busy(&t)) {
+            /* KEY while three dots show. */
+            turned = true;
+            s.turning = true;
+            transition_turn(&t);
+            cd_step(&s, &c, &t, now, &next_fade);
+        }
+    }
+    CHECK(turned && s.timed_moves >= 5 && s.max_cd == 3);
+    CHECK(s.swaps == s.dones && s.swaps == s.timed_moves + 1);
+}
+
+/* Fresh timers give no dots; STALE still counts down. */
+static void test_countdown_states(void)
+{
+    carousel_t c;
+    transition_t t;
+    live_start(&c, &t, 0);
+    const int64_t late = CAROUSEL_PAGE_MS - 500;
+    CHECK(transition_countdown(&t, &c, late) == 1);
+    carousel_tick(&c, LINK_STALE, late);
+    CHECK(transition_countdown(&t, &c, late) == 1); /* STALE cycles too */
+    /* A mode switch: a fresh timer. */
+    carousel_set_page_count(&c, FAR_PAGE_COUNT, late);
+    CHECK(transition_countdown(&t, &c, late) == 0);
+    CHECK(transition_countdown(&t, &c, late + CAROUSEL_PAGE_MS - 500) == 1);
+    /* The page on screen becomes hidden: the next page, a fresh timer. */
+    c.page = (page_id_t)FAR_LLM;
+    carousel_set_hidden(&c, (page_id_t)FAR_LLM, true, late + CAROUSEL_PAGE_MS - 500);
+    CHECK(c.page != (page_id_t)FAR_LLM);
+    CHECK(transition_countdown(&t, &c, late + CAROUSEL_PAGE_MS - 500) == 0);
+    /* While a fade runs: none. */
+    transition_turn(&t);
+    transition_tick(&t, &c, BRIGHTNESS_LIVE, late + 2 * CAROUSEL_PAGE_MS - 1000);
+    CHECK(transition_busy(&t));
+    CHECK(carousel_countdown(&c, late + 2 * CAROUSEL_PAGE_MS - 1000) == 1);
+    CHECK(transition_countdown(&t, &c, late + 2 * CAROUSEL_PAGE_MS - 1000) == 0);
 }
 
 static void test_report_hello(void)
@@ -2513,6 +2712,7 @@ int main(void)
     test_page_tiles_busy_and_missing();
     test_carousel();
     test_carousel_hidden_pages();
+    test_carousel_countdown();
     test_fade_curve();
     test_fade_rise_overflow();
     test_fade_render_flags();
@@ -2522,6 +2722,9 @@ int main(void)
     test_fade_skip_and_hide();
     test_fade_turn();
     test_fade_clock_wraps();
+    test_carousel_tick_delay();
+    test_countdown_cycles();
+    test_countdown_states();
     test_report_hello();
     test_tile_colors_and_levels();
     test_contrast();

@@ -195,6 +195,11 @@ void transition_swapped(transition_t *t, uint32_t now_ms)
     t->since_ms = now_ms;
 }
 
+int transition_countdown(const transition_t *t, const carousel_t *c, int64_t now_ms)
+{
+    return transition_busy(t) ? 0 : carousel_countdown(c, now_ms);
+}
+
 carousel_t transition_shown(const transition_t *t, const carousel_t *c)
 {
     carousel_t s = *c;

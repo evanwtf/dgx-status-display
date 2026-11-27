@@ -82,6 +82,7 @@ static int s_f_fill_px = -1; /* as tile_view_t.fill_px */
 static int s_f_last_page = -1;
 static int16_t s_f_cols[HIST_LEN];
 static uint32_t s_f_chart_fill, s_f_chart_line;
+static lv_obj_t *s_f_dot[CAROUSEL_COUNTDOWN_DOTS];
 
 static view_cb_t s_on_tap, s_on_long_press, s_on_chart_toggle;
 
@@ -159,6 +160,13 @@ static void set_font(lv_obj_t *l, const lv_font_t *font)
 {
     if (lv_obj_get_style_text_font(l, LV_PART_MAIN) != font) {
         lv_obj_set_style_text_font(l, font, 0);
+    }
+}
+
+static void set_hidden(lv_obj_t *o, bool hidden)
+{
+    if (lv_obj_is_hidden(o) != hidden) {
+        lv_obj_set_hidden(o, hidden);
     }
 }
 
@@ -413,6 +421,14 @@ static void build_detail(void)
 #define FAR_BODY_BOTTOM (FAR_M + FAR_S - 40)
 #define FAR_UNIT_GAP_X 6
 #define FAR_UNIT_GAP_Y 30
+/* The countdown dots (transition_countdown()): centered on the box, their
+ * centers 24 px above its bottom edge (y 442). Low and small, so a big name
+ * on two lines, descenders and all, stays 8 px clear. The rightmost n are
+ * lit. */
+#define FAR_DOT_D 20
+#define FAR_DOT_PITCH 48
+#define FAR_DOT_CY (FAR_M + FAR_S - 24)        /* 442 */
+#define FAR_DOT_TOP (FAR_DOT_CY - FAR_DOT_D / 2) /* 432 */
 
 static const lv_font_t *far_name_font(far_name_size_t z)
 {
@@ -551,6 +567,14 @@ static void build_far(void)
         s_f_name[i] = label(s_far, &far_brl_140, COLOR_VALUE, FAR_M, 0, FAR_S,
                             LV_TEXT_ALIGN_CENTER);
     }
+    /* Last, so they draw above the fill and the chart. */
+    for (int i = 0; i < CAROUSEL_COUNTDOWN_DOTS; i++) {
+        const int cx = FAR_M + FAR_S / 2 +
+                       (2 * i - (CAROUSEL_COUNTDOWN_DOTS - 1)) * FAR_DOT_PITCH / 2;
+        s_f_dot[i] = box(s_far, cx - FAR_DOT_D / 2, FAR_DOT_TOP, FAR_DOT_D, FAR_DOT_D);
+        paint(s_f_dot[i], hue_colors(HUE_MOSS)->tint, LV_RADIUS_CIRCLE);
+        lv_obj_set_hidden(s_f_dot[i], true);
+    }
 }
 
 /* NO DATA can stay up for hours: black, no fills, text only. */
@@ -616,6 +640,7 @@ void view_model_fill(view_model_t *m, const status_frame_t *f, link_state_t st,
     m->page = c->page;
     m->link = st;
     m->frame = f;
+    m->countdown = 0;
     if (mode == MODE_FAR) {
         far_page((far_page_t)c->page, f, &m->far);
     } else {
@@ -861,6 +886,12 @@ static void render_far(const view_model_t *m)
     const bool same_page = s_f_last_page == (int)m->page;
     render_far_level(m, same_page);
     s_f_last_page = (int)m->page;
+    /* The muted word color, not the value color: the dots light the same
+     * pixels on every page (burn-in). */
+    for (int i = 0; i < CAROUSEL_COUNTDOWN_DOTS; i++) {
+        set_bg_color(s_f_dot[i], hue_colors(t->hue)->tint);
+        set_hidden(s_f_dot[i], i < CAROUSEL_COUNTDOWN_DOTS - m->countdown);
+    }
 }
 
 static void render_detail(const view_model_t *m)
@@ -979,4 +1010,19 @@ lv_obj_t *view_far_word(void)
 lv_obj_t *view_far_name(int i)
 {
     return s_f_name[i];
+}
+
+lv_obj_t *view_far_unit(void)
+{
+    return s_f_unit;
+}
+
+lv_obj_t *view_far_dot(int i)
+{
+    return s_f_dot[i];
+}
+
+int view_far_dots_top(void)
+{
+    return FAR_DOT_TOP;
 }

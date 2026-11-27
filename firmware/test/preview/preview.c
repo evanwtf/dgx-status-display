@@ -29,6 +29,7 @@
 #include "logic/history.h"
 #include "logic/status.h"
 #include "lvgl.h"
+#include "src/misc/lv_text_private.h" /* lv_text_encoded_next */
 #include "png.h"
 #include "view.h"
 
@@ -305,12 +306,88 @@ static void check_far_text(const char *what, const view_model_t *m)
     }
 }
 
-static void show(const char *dir, const char *name, const status_frame_t *f, link_state_t st,
-                 int64_t age_s, carousel_t c)
+/* The lowest row label l can draw. For fixed strings (word, value, unit):
+ * its baseline less the lowest glyph's offset. For names (`any_text`): the
+ * font's full descent, since a name can hold any glyph. -1 when hidden or
+ * empty. */
+static int text_bottom(lv_obj_t *l, bool any_text)
+{
+    const char *text = lv_label_get_text(l);
+    if (lv_obj_is_hidden(l) || text == NULL || text[0] == '\0') {
+        return -1;
+    }
+    const lv_font_t *font = lv_obj_get_style_text_font(l, LV_PART_MAIN);
+    lv_area_t a;
+    lv_obj_get_coords(l, &a);
+    const int baseline = (int)a.y1 + font->line_height - font->base_line;
+    if (any_text) {
+        return baseline + font->base_line - 1;
+    }
+    int lowest = 0; /* the glyph offset below the baseline, <= 0 */
+    uint32_t i = 0;
+    while (text[i]) {
+        const uint32_t cp = lv_text_encoded_next(text, &i);
+        lv_font_glyph_dsc_t d;
+        if (lv_font_get_glyph_dsc(font, &d, cp, 0) && d.box_h > 0 && d.ofs_y < lowest) {
+            lowest = d.ofs_y;
+        }
+    }
+    return baseline - lowest - 1;
+}
+
+/* Dots drawn: shown, in a shown far view. */
+static int dots_shown(void)
+{
+    int n = 0;
+    for (int i = 0; i < CAROUSEL_COUNTDOWN_DOTS; i++) {
+        lv_obj_t *d = view_far_dot(i);
+        n += !lv_obj_is_hidden(d) && !lv_obj_is_hidden(lv_obj_get_parent(d));
+    }
+    return n;
+}
+
+/* No far text may come within DOTS_CLEAR_PX of the countdown dots' top, on
+ * any page and state: the dots light under the text 3 s of every page. */
+#define DOTS_CLEAR_PX 8
+static int s_lowest_ink = -1;
+static char s_lowest_what[64];
+static void check_far_dots_clear(const char *what, const view_model_t *m)
+{
+    if (m->mode != MODE_FAR || m->kind != VIEW_PAGE) {
+        return;
+    }
+    lv_obj_t *const labels[] = {view_far_word(), view_far_value(), view_far_unit(),
+                                view_far_name(0), view_far_name(1)};
+    int lowest = -1, box = -1; /* the box is reported, not checked */
+    for (size_t i = 0; i < sizeof(labels) / sizeof(labels[0]); i++) {
+        const int b = text_bottom(labels[i], i >= 3);
+        lowest = b > lowest ? b : lowest;
+        if (b >= 0) {
+            lv_area_t a;
+            lv_obj_get_coords(labels[i], &a);
+            box = (int)a.y2 > box ? (int)a.y2 : box;
+        }
+    }
+    const int limit = view_far_dots_top() - DOTS_CLEAR_PX;
+    printf("%s dots  %-28s lowest text y=%d (label box y=%d), dots top y=%d (gap %d)\n",
+           lowest <= limit ? "ok  " : "FAIL", what, lowest, box, view_far_dots_top(),
+           view_far_dots_top() - 1 - lowest);
+    if (lowest > limit) {
+        s_failed++;
+    }
+    if (lowest > s_lowest_ink) {
+        s_lowest_ink = lowest;
+        snprintf(s_lowest_what, sizeof(s_lowest_what), "%s", what);
+    }
+}
+
+static void show_countdown(const char *dir, const char *name, const status_frame_t *f,
+                           link_state_t st, int64_t age_s, carousel_t c, int countdown)
 {
     view_model_t m;
     memset(&m, 0, sizeof(m));
     view_model_fill(&m, f, st, age_s, &c, s_mode);
+    m.countdown = countdown;
     m.style = s_style;
     m.hist_heights = preview_heights;
     m.accepted = 3600;
@@ -320,20 +397,35 @@ static void show(const char *dir, const char *name, const status_frame_t *f, lin
     m.stack_free_ui = 3100;
     check_orbit(name, &m);
     check_far_text(name, &m);
+    check_far_dots_clear(name, &m);
+    /* Dots only on a far page: never in near mode, on the detail view or
+     * on NO DATA. */
+    const int want_dots = m.mode == MODE_FAR && m.kind == VIEW_PAGE ? countdown : 0;
+    if (dots_shown() != want_dots) {
+        fprintf(stderr, "FAIL %s: %d dots shown, want %d\n", name, dots_shown(), want_dots);
+        s_failed++;
+    }
     save(dir, name);
     add_to_sheet();
+}
+
+static void show(const char *dir, const char *name, const status_frame_t *f, link_state_t st,
+                 int64_t age_s, carousel_t c)
+{
+    show_countdown(dir, name, f, st, age_s, c, 0);
 }
 
 /* Render a page, then the same model again: the second render must flush
  * nothing. The UI renders every 250 ms; a setter that invalidates on an
  * unchanged value redraws the screen each time. */
 static void check_rerender(const char *what, const status_frame_t *f, int page,
-                           view_mode_t mode, link_state_t st)
+                           view_mode_t mode, link_state_t st, int countdown)
 {
     view_model_t m;
     memset(&m, 0, sizeof(m));
     carousel_t c = on_page((page_id_t)page);
     view_model_fill(&m, f, st, 6, &c, mode);
+    m.countdown = countdown;
     m.style = CHART_LEVEL;
     m.hist_heights = preview_heights;
     render(&m);
@@ -647,17 +739,45 @@ int main(int argc, char **argv)
             {"far-name-longer", "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"},
             {"far-name-two", "Qwen/Qwen3-8B, google/gemma-3-27b-it"},
             {"far-name-nobreak", "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUV"},
+            /* Short quantized names: two lines at the big size, with a
+             * descender (Q) on the second line, just above the dots. */
+            {"far-name-phi-awq", "microsoft/Phi-4-AWQ"},
+            {"far-name-phi-q4", "Phi-4-Q4"},
         };
         for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
             status_frame_t n = busy;
             snprintf(n.llm_model, sizeof(n.llm_model), "%s", names[i][1]);
             show(dir, names[i][0], &n, LINK_LIVE, 0, on_page((page_id_t)FAR_MODEL));
         }
+        /* The last one, Phi-4-Q4, must be two lines at the big size (the
+         * word's font, "MODEL" fits big): the case closest to the dots. */
+        if (lv_obj_is_hidden(view_far_name(1)) ||
+            lv_obj_get_style_text_font(view_far_name(1), LV_PART_MAIN) !=
+                lv_obj_get_style_text_font(view_far_word(), LV_PART_MAIN)) {
+            fprintf(stderr, "FAIL far-name-phi-q4 is not two big lines\n");
+            s_failed++;
+        }
         status_frame_t occ = real;
         snprintf(occ.occ, sizeof(occ.occ), "llama.cpp");
         show(dir, "far-name-occupant", &occ, LINK_LIVE, 0, on_page((page_id_t)FAR_MODEL));
         snprintf(occ.occ, sizeof(occ.occ), "vllm"); /* one line, 100 px caps */
         show(dir, "far-name-vllm", &occ, LINK_LIVE, 0, on_page((page_id_t)FAR_MODEL));
+    }
+    /* The countdown before a page change: 3, 2, 1 dots. */
+    for (int n = CAROUSEL_COUNTDOWN_DOTS; n >= 1; n--) {
+        char name[32];
+        snprintf(name, sizeof(name), "far-countdown-%d", n);
+        show_countdown(dir, name, &busy, LINK_LIVE, 0, on_page((page_id_t)FAR_GPU), n);
+    }
+    /* The pages whose text comes closest to the dots: the unit line, and a
+     * big name on two lines. */
+    show_countdown(dir, "far-countdown-3-memory", &busy, LINK_LIVE, 0,
+                   on_page((page_id_t)FAR_MEMORY), CAROUSEL_COUNTDOWN_DOTS);
+    {
+        status_frame_t n = busy;
+        snprintf(n.llm_model, sizeof(n.llm_model), "Phi-4-Q4");
+        show_countdown(dir, "far-countdown-3-phi-q4", &n, LINK_LIVE, 0,
+                       on_page((page_id_t)FAR_MODEL), CAROUSEL_COUNTDOWN_DOTS);
     }
     show(dir, "far-no-data", &real, LINK_NO_DATA, 133, nodata);
     show(dir, "far-no-data-boot", &missing, LINK_NO_DATA, -1, nodata);
@@ -770,16 +890,20 @@ int main(int argc, char **argv)
     for (int p = 0; p < FAR_PAGE_COUNT; p++) {
         char what[40];
         snprintf(what, sizeof(what), "far %s", far_page_name((far_page_t)p));
-        check_rerender(what, &busy, p, MODE_FAR, LINK_LIVE);
+        check_rerender(what, &busy, p, MODE_FAR, LINK_LIVE, 0);
         snprintf(what, sizeof(what), "far %s stale", far_page_name((far_page_t)p));
-        check_rerender(what, &busy, p, MODE_FAR, LINK_STALE);
+        check_rerender(what, &busy, p, MODE_FAR, LINK_STALE, 0);
+        for (int n = 1; n <= CAROUSEL_COUNTDOWN_DOTS; n++) {
+            snprintf(what, sizeof(what), "far %s dots %d", far_page_name((far_page_t)p), n);
+            check_rerender(what, &busy, p, MODE_FAR, LINK_LIVE, n);
+        }
     }
     for (int p = 0; p < PAGE_COUNT; p++) {
         char what[40];
         snprintf(what, sizeof(what), "near %s", page_name((page_id_t)p));
-        check_rerender(what, &busy, p, MODE_NEAR, LINK_LIVE);
+        check_rerender(what, &busy, p, MODE_NEAR, LINK_LIVE, 0);
         snprintf(what, sizeof(what), "near %s stale", page_name((page_id_t)p));
-        check_rerender(what, &busy, p, MODE_NEAR, LINK_STALE);
+        check_rerender(what, &busy, p, MODE_NEAR, LINK_STALE, 0);
     }
 
     /* Same LV_MEM_SIZE as the firmware, after every page and the detail
@@ -795,6 +919,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "FAIL %d flushed windows break the CO5300 rule\n", s_bad_windows);
         s_failed++;
     }
+    printf("lowest far text: y=%d (%s); dots top y=%d\n", s_lowest_ink, s_lowest_what,
+           view_far_dots_top());
     printf("%s\n", s_failed ? "preview: FAILED" : "preview: ok");
     return s_failed ? 1 : 0;
 }

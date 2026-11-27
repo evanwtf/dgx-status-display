@@ -420,7 +420,8 @@ The panel is about 40 mm across. It has two modes, and a short press of
 - **Near**: six pages of four colored tiles.
 
 Both cycle every 6 seconds, with a fade through black between pages:
-150 ms out, 500 ms back in.
+150 ms out, 500 ms back in. In far mode, dots along the bottom count down
+the last 3 seconds before each timed page change.
 
 In both modes, the LLM page shows only while the daemon reads at least one
 engine up from the LLM metrics exporter. The exporter must listen on

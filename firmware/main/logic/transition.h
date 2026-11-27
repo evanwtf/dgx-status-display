@@ -105,5 +105,11 @@ tr_out_t transition_tick(transition_t *t, carousel_t *c, uint8_t target, int64_t
 /* The redraw at 0 is on the panel: start the fade in. */
 void transition_swapped(transition_t *t, uint32_t now_ms);
 
+/* The countdown dots to draw (carousel_countdown()): 0 while a fade runs.
+ * The only render during a fade is the swap, and the dwell restarts when
+ * the fade-in ends, so the dots never fade in: not after a page change, and
+ * not after a rotation or a mode switch, which keep the page timer. */
+int transition_countdown(const transition_t *t, const carousel_t *c, int64_t now_ms);
+
 /* The carousel state to draw: the carousel with the shown view. */
 carousel_t transition_shown(const transition_t *t, const carousel_t *c);

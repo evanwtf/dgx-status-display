@@ -35,6 +35,7 @@ static const char *TAG = "ui";
 static carousel_t s_carousel;
 static transition_t s_tr;
 static lv_timer_t *s_fade_timer;
+static lv_timer_t *s_tick_timer;
 static link_state_t s_link = LINK_NO_DATA;
 static uint32_t s_redraw_ms;    /* the last redraw at 0 */
 static bool s_fade_logged;
@@ -342,6 +343,16 @@ static void tick(lv_timer_t *t)
      * LVGL redraw (up to ~126 ms for a far-mode level fill), which blocks
      * the FADE_STEP_MS fade timer, so the brightness stalls, then jumps. */
     transition_step(now);
+    if (t != NULL) {
+        /* Lock the ticks to the page timer: LVGL counts each period from
+         * when the timer ran, so one late tick shifts every later one, and
+         * a countdown step could come 750 or 1250 ms after the last. Each
+         * 1 s step and the page change then fall on a tick that runs on
+         * time. At most UI_PERIOD_MS: the watchdog feed runs here. LVGL
+         * counts from the start of this run, which is `now`. */
+        lv_timer_set_period(s_tick_timer,
+                            (uint32_t)carousel_tick_delay(&s_carousel, now, UI_PERIOD_MS));
+    }
 }
 
 /* Draw the view the panel shows, which lags the carousel during a fade. */
@@ -351,6 +362,12 @@ static void render(int64_t now)
     view_model_fill(&s_model, &s_rx.frame, s_link, link_age_s(&s_rx.link, now), &shown,
                     s_mode_shown);
     s_model.style = s_style;
+    /* Far mode only: near mode has page dots in its strip. No render runs
+     * during a fade (tr_out_t.render), so the last dot fades out with the
+     * page; the new page draws at the dark moment with a fresh timer, so
+     * with no dots. */
+    s_model.countdown =
+        s_mode_shown == MODE_FAR ? transition_countdown(&s_tr, &s_carousel, now) : 0;
     s_model.hist_heights = serial_rx_hist_heights;
     s_model.accepted = s_rx.accepted;
     s_model.rejected = s_rx.rejected;
@@ -381,7 +398,7 @@ void ui_init(void)
     lv_display_add_event_cb(lv_display_get_default(), on_refresh_start, LV_EVENT_REFR_START,
                             NULL);
     tick(NULL);
-    lv_timer_create(tick, UI_PERIOD_MS, NULL);
+    s_tick_timer = lv_timer_create(tick, UI_PERIOD_MS, NULL);
     s_fade_timer = lv_timer_create(fade_tick, FADE_STEP_MS, NULL);
     lv_timer_pause(s_fade_timer);
     buttons_start(on_key_short, on_boot_short);

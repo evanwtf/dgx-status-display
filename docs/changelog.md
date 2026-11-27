@@ -9,6 +9,10 @@
   animations stop when a fade starts. The new page draws at the dark
   moment, and new data shows when the fade-in ends.
 - Firmware: each page shows for 6 s (was 10 s), plus the fade.
+- Far mode: dots along the bottom count down the last 3 s before a page
+  change. Three dots light at 3 s, and the leftmost goes out each second.
+  They use the page's word color. There are no dots on the detail page or
+  on NO DATA.
 
 ## 0.0.4 (2026-11-27)
 

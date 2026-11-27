@@ -28,6 +28,10 @@ typedef struct {
     page_id_t page;   /* in far mode, a far_page_t */
     tile_t tiles[TILES_PER_PAGE];
     far_t far;
+    /* Far mode: countdown dots lit before the page change, 0 to
+     * CAROUSEL_COUNTDOWN_DOTS (transition_countdown()). view_model_fill()
+     * sets 0; the caller sets it. */
+    int countdown;
     link_state_t link;
     char clock[8];   /* "22:44", or "" before the first frame */
     char age[24];    /* time since the last frame: "5s", "2m 13s", "never" */
@@ -80,3 +84,8 @@ lv_obj_t *view_tile_value(int i);
 lv_obj_t *view_far_value(void);
 lv_obj_t *view_far_word(void);
 lv_obj_t *view_far_name(int i);
+lv_obj_t *view_far_unit(void);
+/* Far mode: countdown dot i (0 to CAROUSEL_COUNTDOWN_DOTS - 1, left to
+ * right), and the top y of the dots on the screen with no shift. */
+lv_obj_t *view_far_dot(int i);
+int view_far_dots_top(void);
