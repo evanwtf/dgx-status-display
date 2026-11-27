@@ -371,7 +371,10 @@ def test_flash_merged_warns_that_it_erases_the_settings(
     make_backup(tmp_path)
     with caplog.at_level(logging.WARNING, logger="firmware"):
         assert firmware.main(["flash-merged", "--port", "/dev/ttyACM0"]) == 0
-    assert "erases the board's settings (rotation, chart style)" in caplog.text
+    assert (
+        "erases the board's settings (rotation, chart style, display mode"
+        in caplog.text
+    )
 
 
 def test_backup_never_replaces_a_backup(tmp_path: Path, board_env: Calls) -> None:

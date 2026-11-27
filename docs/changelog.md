@@ -5,10 +5,18 @@
 - Far mode, the new default: one metric per page (GPU, POWER, TEMP, LLM,
   MODEL, MEMORY, CPU), sized from an eye chart read on the board at 2 m.
   Words have 100 px capitals, values 141 px digits (109 px for 4 or more
-  characters), and units and names 81 px capitals. The metric's level fill,
+  characters), units 81 px capitals, and names 100 px capitals when they
+  fit, else 81 px. The metric's level fill,
   or its 2-minute history, spans the screen. A short press of BOOT switches
   between far and near mode, with a fade, and NVS keeps the choice. Near
   mode is unchanged. The board logs `mode far` or `mode near`.
+- Upgrade: delete `firmware/sdkconfig` before you build. A sdkconfig from
+  an older build keeps the old LVGL settings, and far mode then draws no
+  text; the build now stops with "stale firmware/sdkconfig" instead.
+- `flash-merged` also resets the display mode to far.
+- Firmware: a failed LVGL allocation traps (core dump, reboot) instead of
+  drawing a blank glyph. The minute `free:` line reports the LVGL heap
+  peak.
 - Firmware: the LVGL heap is 96 KB (was 48 KB). A glyph of the 141 px
   digits needs a 16 KB buffer on it while it draws. The far-mode fonts are
   RLE-compressed (`LV_USE_FONT_COMPRESSED`).

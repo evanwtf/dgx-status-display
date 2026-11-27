@@ -367,7 +367,10 @@ def board(step: str, port: str, *, no_backup: bool = False) -> int:
     if dev is None:
         return 2
     if step == "flash-merged":
-        logger.warning("this erases the board's settings (rotation, chart style)")
+        logger.warning(
+            "this erases the board's settings (rotation, chart style, display mode: "
+            "back to far)"
+        )
     cmd = board_argv(
         step,
         REPO,

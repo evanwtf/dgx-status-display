@@ -103,6 +103,10 @@ sudo systemctl start dgx-status
 
 The board targets refuse while the service runs.
 
+If `make fw-build` stops with "stale firmware/sdkconfig", delete
+`firmware/sdkconfig` and run it again. A sdkconfig from an older build
+keeps old settings; far mode needs new ones.
+
 ## Hardware
 
 - **Board:** [Waveshare ESP32-C6-Touch-AMOLED-2.16](https://docs.waveshare.com/ESP32-C6-Touch-AMOLED-2.16).
@@ -113,9 +117,11 @@ The board targets refuse while the service runs.
 - **Host:** an NVIDIA DGX Spark (GB10). The fan readings need the
   `nvfanread` hwmon module.
 
-The screen shows GPU use, power and temperature, what is on the GPU, memory,
-CPU, load, fan speeds, board, NVMe and NIC temperatures, uptime and the
-host's clock. A tap opens a page with every temperature sensor.
+Far mode (the default) shows GPU use, power and temperature, LLM output,
+the model or what is on the GPU, memory and CPU, one per page, readable
+from 2 m. Near mode adds load, fan speeds, board and NVMe temperatures,
+network and storage rates, uptime and the host's clock. In both modes, a
+long press opens a page with every temperature sensor.
 
 ## Bootstrap, step by step
 
@@ -188,8 +194,9 @@ make flash-merged      # merge, then write the one image at 0x0
 ```
 
 The board restarts and shows "DGX not sending". `flash-merged` erases the
-board's stored settings (the screen rotation and the chart style). Use it
-for a first install; later, `make flash` keeps them.
+board's stored settings (the screen rotation, the chart style and the
+display mode, which goes back to far). Use it for a first install; later,
+`make flash` keeps them.
 
 **If esptool cannot connect** (for example, the firmware on the chip has
 taken over USB): unplug the board, hold **BOOT**, plug it back in, release
@@ -273,8 +280,8 @@ sha256sum --ignore-missing -c SHA256SUMS    # each file must say OK
 
 **First install:** flash the merged image at 0x0. It holds the bootloader,
 the partition table and the app, with 0xFF between them. It erases the
-board's stored settings (the screen rotation and the chart style), so use it
-only for a first install:
+board's stored settings (the screen rotation, the chart style and the
+display mode, which goes back to far), so use it only for a first install:
 
 ```bash
 docker run --rm --device="$DEV" -v "$REPO/release:/release:ro" -w /release "$IDF_IMAGE" \
@@ -363,6 +370,9 @@ make flash
 sudo systemctl start dgx-status
 ```
 
+If the build stops with "stale firmware/sdkconfig", run
+`rm firmware/sdkconfig` and build again.
+
 `make monitor` shows the board's own log (`idf.py monitor --no-reset`;
 Ctrl-] quits). It also needs the service stopped.
 
@@ -411,13 +421,19 @@ The panel is about 40 mm across. It has two modes, and a short press of
 
 Both cycle every 10 seconds, with a 0.3 s fade through black between pages.
 
+In both modes, the LLM page shows only while the daemon reads at least one
+engine up from the LLM metrics exporter. The exporter must listen on
+loopback (the daemon refuses any other address). While the exporter is
+down, or too slow to answer for 15 s, the page hides.
+
 ### Far mode
 
 Each page shows one word, one value and its unit, over the metric's level
 fill across the whole screen. Sizes come from an eye chart read on the
 board at 2 m: words have 100 px capitals (81 px when a word is too wide),
-values have 141 px digits (109 px for 4 or more characters), and units and
-names have 81 px capitals. All text is upper case, so no letter is smaller.
+values have 141 px digits (109 px for 4 or more characters), units have
+81 px capitals, and names have 100 px capitals when they fit and 81 px
+when they do not. All text is upper case, so no letter is smaller.
 There is no clock and no page dot: neither is readable from 2 m.
 
 | Page | Shows |
@@ -426,7 +442,7 @@ There is no clock and no page dot: neither is readable from 2 m.
 | POWER | GPU power in W, fill to 240 W |
 | TEMP | GPU °C, blue, then amber from 80 °C, red from 90 °C; fill from 20 to 100 °C |
 | LLM | Output tok/s or k tok/s, no fill. Only while an engine is up. |
-| MODEL | The models of the engines that are up, without the `org/` part. With no engine up, RUNNING and the GPU's backend (`vllm`, `llama.cpp`). Hidden when the GPU is idle and no engine is up. A long name takes two lines and ends in `...` if it still does not fit. |
+| MODEL | The first engine's model, without the `org/` part, and `+N` for N more engines. With no engine up, RUNNING and the GPU's backend (`vllm`, `llama.cpp`). Hidden when no engine is up and the GPU is idle or unknown. A long name takes two lines and ends in `...` if it still does not fit. A character outside ASCII shows as `?`. |
 | MEMORY | GiB used, `/ 128 GIB` as the unit, fill to the total |
 | CPU | CPU %, fill to 100 % |
 
@@ -439,11 +455,6 @@ heading.
 
 Six pages of four colored tiles. Each tile has a label, one value and a
 unit.
-
-The LLM page shows only while the daemon reads at least one engine up from
-the LLM metrics exporter. The exporter must listen on loopback (the daemon
-refuses any other address). While the exporter is down, or too slow to
-answer for 15 s, the page hides.
 
 | Page | Tiles |
 | --- | --- |
